@@ -1,0 +1,23 @@
+# Local runtime configuration
+.env
+.env.*
+!.env.example
+
+# Dependencies and generated output
+node_modules/
+coverage/
+dist/
+build/
+
+# Local HTTPS certificates
+.certs/
+*.key
+*.pem
+*.crt
+
+# Logs and editor/OS files
+*.log
+npm-debug.log*
+.DS_Store
+.idea/
+.vscode/
