@@ -1,79 +1,92 @@
-# reBot Arm B601-RS 网页控制台
+# reBot Arm B601-RS
 
-该目录提供 B601-RS 的 Three.js 网页模型、ROS 2 控制面板和可选的
-MotorBridge 高级控制界面。它与仓库中的 `rebotarm_ros2` 使用同一份 RS
-URDF/STL；目录内的 `description` 只作为网页被单独复制时的离线后备。
+这是 B601-RS（RobStride/SocketCAN）专用仓库。ROS 2 核心基于最新统一版
+`rebotarm_ros2`，网页控制台针对 RS 模型、命令接口和夹爪单位单独适配。
 
-## 当前能力
+## 目录
 
-| 能力 | 状态 |
-| --- | --- |
-| RS Three.js/URDF/STL | 可用 |
-| RS ROS 2 Fake Driver | 可用，命名空间 `/rebotarm_rs` |
-| RS 真机 ROS 2 Controller | 可用，命名空间 `/rebotarm` |
-| 新版 `JointPosVelCmd`/`JointMitCmd` | 已适配 |
-| RS 夹爪宽度与电机角度换算 | 已适配，71.5 mm ↔ 5 rad |
-| RS MuJoCo 动力学 | 可用，启动脚本默认打开 Viewer 与 physics 模式 |
-| 三色物体抓取环境 | 可用，含俯视相机、检测、IK 与物理抬升验证 |
-| MCP/Text 抓取 Agent | 可用，MCP 默认 `http://127.0.0.1:8081/mcp` |
-| MotorBridge 直连 | 保留；不能替代物理急停和后端安全层 |
+```text
+reBot_Arm_Mujoco-RS/
+├── rebotarm_ros2/          # ROS 2 驱动、MuJoCo 抓取环境、RS Agent
+├── reBotArm_simulator-RS/  # RS Three.js 网页控制台
+└── scripts/                # 构建、仿真和真机启动脚本
+```
 
-## 启动网页
+## 最短运行路径
+
+```bash
+./scripts/setup_rs_workspace.sh
+./scripts/start_rs_sim.sh
+```
+
+首次执行 setup 会拉取并固定
+[`LAN-GER/reBot-B601-RS-for-mujoco_sim`](https://github.com/LAN-GER/reBot-B601-RS-for-mujoco_sim)
+的 RS MJCF、网格和场景资源，同时创建独立 `.venv` 并安装 MuJoCo 与真机 SDK
+所需依赖。`start_rs_sim.sh` 默认启动 MuJoCo 窗口、动力学抓取环境、俯视相机、
+目标检测、IK/轨迹服务和 MCP 抓取 Agent：
+
+```bash
+./scripts/start_rs_sim.sh
+```
+
+无桌面的自动化测试可显式关闭窗口并切换到运动学同步：
+
+```bash
+REBOTARM_MUJOCO_VIEWER=false REBOTARM_MUJOCO_MODE=kinematic ./scripts/start_rs_sim.sh
+```
+
+另开终端：
 
 ```bash
 cd reBotArm_simulator-RS
 npm start
 ```
 
-浏览器访问 `http://localhost:3002`。
+打开 `http://localhost:3002`，ROS 目标选择 `/rebotarm_rs`。
 
-## 启动安全仿真
+## 抓取 Agent
 
-先在仓库根目录构建 ROS 2 工作区：
+仿真启动后，场景内有红色方块、蓝色长方块和黄色圆柱。MCP 地址为：
 
-```bash
-./scripts/setup_rs_workspace.sh
+```text
+http://127.0.0.1:8081/mcp
 ```
 
-然后启动 RS Fake Driver、MuJoCo 动力学 Viewer、抓取 Agent 和 rosbridge：
+`pick_color` 会执行 RS 专用的俯视抓取，并确认物体在 MuJoCo 中实际升高后才返回
+成功。主要 ROS 话题：
 
-```bash
-./scripts/start_rs_sim.sh
-```
+- `/rebotarm_rs/mujoco/object_states`
+- `/rebotarm_rs/mujoco/overhead_rgb/image_raw`
+- `/rebotarm_rs/vision/color_blocks/detections`
 
-网页填写 `ws://<Ubuntu-IP>:9090`，选择“RS 仿真（/rebotarm_rs）”。收到
-`fake_rs_pos_vel` 状态后，网页会自动允许仿真控制。
-
-网页自然语言助手另开终端启动：
+如需网页里的自然语言助手，配置兼容 OpenAI 的模型后启动：
 
 ```bash
 export DASHSCOPE_API_KEY="你的 Key"
+export REBOTARM_LLM_MODEL="qwen-plus"
 ./scripts/start_rs_text_agent.sh
 ```
 
-## RS 真机
+Text Agent/Dashboard 默认监听 `http://localhost:8082`。不配置大模型时，MCP 的
+检测、抓取、IK 和关节工具仍可直接使用。
 
-真机使用 SocketCAN `can0`，默认控制模式为 MIT。真机脚本设有显式保护：
+真机启动受到显式环境变量保护，参见
+[`reBotArm_simulator-RS/README.md`](reBotArm_simulator-RS/README.md)。
 
-```bash
-export REBOTARM_RS_HARDWARE_CONFIRM=I_UNDERSTAND_RS_WILL_MOVE
-./scripts/start_rs_hardware.sh
-```
+## 当前边界
 
-同时启动真机、Fake Driver 和 rosbridge：
+RS 网页、ROS 2 真机驱动、MoveIt 模型、Fake Driver、MuJoCo 物理抓取和 Agent
+已经形成闭环。运动学模式适合验证接口和网页控制；动力学参数与抓取高度针对当前 RS
+MJCF 验证通过，后续用于真机前仍需重新标定。RS 使用独立 MJCF，不复用 DM 的机械
+结构和执行器参数。
 
-```bash
-export REBOTARM_RS_HARDWARE_CONFIRM=I_UNDERSTAND_RS_WILL_MOVE
-./scripts/start_rs_dual.sh
-```
+## 第三方版本与本仓库覆盖
 
-执行前必须确认 `can0` 配置正确、机械臂工作区无人、物理急停可用。网页真机
-模式不会自动打开控制锁。
+`rebotarm_ros2/third_party/` 是 setup 自动生成目录，不直接提交嵌套 Git 仓库：
 
-## ROS 2 接口约定
+- `patches/rebotarm_control_py_rs.patch` 保存 RS 轨迹时长安全修正；
+- `vendor_overrides/reBot-B601-RS-for-mujoco_sim/` 保存已验证的 RS MJCF 外观、碰撞与标牌资源；
+- `scripts/setup_rs_workspace.sh` 拉取固定上游提交后自动应用上述内容。
 
-- 关节位置速度：`/<namespace>/joints/<joint>/cmd/pos_vel`
-- 关节 MIT：`/<namespace>/joints/<joint>/cmd/mit`
-- 夹爪位置速度：`/<namespace>/gripper/cmd/pos_vel`
-- 状态：`/<namespace>/joint_states`、`arm_status`、`gripper/state`
-- 网页内部夹爪单位是米；ROS 2 夹爪电机位置单位是弧度。
+因此从全新 clone 执行 setup，可以复现当前本机使用的 SDK 与 MuJoCo 场景，而不依赖
+未提交的 `third_party` 工作树。

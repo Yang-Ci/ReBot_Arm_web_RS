@@ -1,0 +1,150 @@
+<mujoco model="00_arm_rs_asm_v3">
+  <compiler angle="radian" meshdir="meshes/" />
+  <asset>
+    <mesh name="base_link" file="base_link.STL" />
+    <mesh name="link1" file="link1.STL" />
+    <mesh name="motor_2_3" file="motor_2_3.STL" />
+    <mesh name="cnc2" file="cnc2.STL" />
+    <mesh name="pla2_black" file="pla2_black.STL" />
+    <mesh name="pla2_green" file="pla2_green.STL" />
+    <mesh name="link2" file="link2.STL" />
+    <mesh name="cnc3" file="cnc3.STL" />
+    <mesh name="motor_4" file="motor_4.STL" />
+    <mesh name="pla3_black" file="pla3_black_without_seeed_badge.STL" />
+    <mesh name="pla3_seeed_wordmark" file="pla3_seeed_badge_with_counters.STL" />
+    <mesh name="pla3_seeed_wordmark_backing" file="pla3_seeed_wordmark_backing.STL" />
+    <mesh name="pla3_green" file="pla3_green.STL" />
+    <mesh name="link3" file="link3.STL" />
+    <mesh name="motor_5" file="motor_5.STL" />
+    <mesh name="cnc4" file="cnc4.STL" />
+    <mesh name="link4" file="link4.STL" />
+    <mesh name="motor_6" file="motor_6.STL" />
+    <mesh name="cnc5" file="cnc5.STL" />
+    <mesh name="pla5_green" file="pla5_green.STL" />
+    <mesh name="link5" file="link5.STL" />
+    <mesh name="link6" file="link6.STL" />
+    <mesh name="pla7_green" file="pla7_green.STL" />
+    <mesh name="cnc7" file="cnc7.STL" />
+    <mesh name="motor_7" file="motor_7.STL" />
+    <mesh name="gripper_end" file="gripper_end.STL" />
+    <mesh name="pla_left" file="pla_left.STL" />
+    <mesh name="cnc_left" file="cnc_left.STL" />
+    <mesh name="pla_right" file="pla_right.STL" />
+    <mesh name="cnc_right" file="cnc_right.STL" />
+    <!-- Physical finish palette shared with the RS URDF and Web renderer. -->
+    <material name="rs_base_black_mat" rgba="0.055 0.065 0.060 1" specular="0.50" shininess="0.72" metallic="0.82" roughness="0.20" />
+    <material name="rs_motor_black_mat" rgba="0.045 0.052 0.049 1" specular="0.42" shininess="0.48" metallic="0.48" roughness="0.48" />
+    <material name="rs_pla_black_mat" rgba="0.090 0.106 0.102 1" specular="0.22" shininess="0.24" metallic="0.08" roughness="0.58" />
+    <material name="rs_wordmark_black_mat" rgba="0.010 0.012 0.011 1" specular="0.04" shininess="0.04" metallic="0.00" roughness="0.76" />
+    <material name="rs_anodized_silver_mat" rgba="0.720 0.760 0.730 1" specular="0.72" shininess="0.90" metallic="0.88" roughness="0.18" />
+    <material name="rs_seeed_green_mat" rgba="0.725 0.835 0.118 1" specular="0.22" shininess="0.26" metallic="0.18" roughness="0.34" />
+  </asset>
+
+  <worldbody>
+    <body name="base_link" pos="0 0 0">
+      <inertial pos="0.0000029 -0.0001223 0.0243376" mass="1.1774" fullinertia="0.0013304 0.00213119 0.00275877 0.00000001 0 0"/>
+      <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_base_black_mat" type="mesh" mesh="base_link" />
+      <geom pos="0 0 0" rgba="0 0 0 0" group="3" contype="1" conaffinity="1" type="mesh" mesh="base_link" />
+      <body name="link1" pos="-0.0003428 -0.0009868 0.075">
+        <joint name="joint1" type="hinge" axis="0 0 -1" limited="true" range="-2.8 2.8" damping="0.5" frictionloss="0"/>
+        <inertial pos="0.0081765 0.0012258 0.033142" mass="0.4655" fullinertia="0.00025207 0.00015464 0.00023416 0 -0.00002832 0"/>
+        <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_anodized_silver_mat" type="mesh" mesh="link1" />
+        <geom pos="0 0 0" rgba="0 0 0 0" group="3" contype="1" conaffinity="1" type="mesh" mesh="link1" />
+        <body name="link2" pos="0.020343 0.027237 0.07" quat="0.7071055 -0.7071081 0 0">
+          <joint name="joint2" type="hinge" axis="0 0 1" limited="true" range="0 3.14" damping="0.5" frictionloss="0"/>
+          <inertial pos="-0.1178648 -0.0034223 -0.0271552" mass="1.772" fullinertia="0.00073374 0.01255987 0.01281387 -0.00000043 0.00000851 0.00000128"/>
+          <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_motor_black_mat" type="mesh" mesh="motor_2_3" />
+          <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_anodized_silver_mat" type="mesh" mesh="cnc2" />
+          <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_pla_black_mat" type="mesh" mesh="pla2_black" />
+          <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_seeed_green_mat" type="mesh" mesh="pla2_green" />
+          <geom pos="0 0 0" rgba="0 0 0 0" group="3" contype="1" conaffinity="1" type="mesh" mesh="link2" />
+          <body name="link3" pos="-0.236 0 0">
+            <joint name="joint3" type="hinge" axis="0 0 -1" limited="true" range="0 3.14" damping="0.5" frictionloss="0"/>
+            <inertial pos="0.1034272 -0.0664138 -0.0271069" mass="1.062" fullinertia="0.00046807 0.00632695 0.00648221 -0.00003456 -0.0000426 0.00000006"/>
+            <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_anodized_silver_mat" type="mesh" mesh="cnc3" />
+            <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_motor_black_mat" type="mesh" mesh="motor_4" />
+            <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_pla_black_mat" type="mesh" mesh="pla3_black" />
+            <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_seeed_green_mat" type="mesh" mesh="pla3_seeed_wordmark" />
+            <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_wordmark_black_mat" type="mesh" mesh="pla3_seeed_wordmark_backing" />
+            <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_seeed_green_mat" type="mesh" mesh="pla3_green" />
+            <geom pos="0 0 0" rgba="0 0 0 0" group="3" contype="1" conaffinity="1" type="mesh" mesh="link3" />
+            <body name="link4" pos="0.228 -0.072746 0.0045">
+              <joint name="joint4" type="hinge" axis="0 0 -1" limited="true" range="-1.57 1.57" damping="0.5" frictionloss="0"/>
+              <inertial pos="0.0475545 -0.0441113 -0.0314112" mass="0.66" fullinertia="0.00045986 0.00075258 0.00066742 0.00024219 0 0"/>
+              <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_motor_black_mat" type="mesh" mesh="motor_5" />
+              <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_anodized_silver_mat" type="mesh" mesh="cnc4" />
+              <geom pos="0 0 0" rgba="0 0 0 0" group="3" contype="1" conaffinity="1" type="mesh" mesh="link4" />
+              <body name="link5" pos="0.087 -0.048 -0.03075" quat="0.7071055 -0.7071081 0 0">
+                <joint name="joint5" type="hinge" axis="0 0 -1" limited="true" range="-1.57 1.57" damping="0.5" frictionloss="0"/>
+                <inertial pos="-0.0114401 0.0000048 0.0480487" mass="0.1501205" fullinertia="0.0000734238 0.0000551539 0.000052992 0.0000000136 -0.0000008581 -0.0000000133"/>
+                <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_motor_black_mat" type="mesh" mesh="motor_6" />
+                <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_anodized_silver_mat" type="mesh" mesh="cnc5" />
+                <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_seeed_green_mat" type="mesh" mesh="pla5_green" />
+                <geom pos="0 0 0" rgba="0 0 0 0" group="3" contype="1" conaffinity="1" type="mesh" mesh="link5" />
+                <body name="link6" pos="0.0365 0 0.048" quat="0.7071055 0 0.7071081 0">
+                  <joint name="joint6" type="hinge" axis="0 0 -1" limited="true" range="-3.14 3.14" damping="2.0" frictionloss="0.1"/>
+                  <inertial pos="0.000018 0 0.0043481" mass="0.03" fullinertia="0.0000044227 0.0000043719 0.000008543 0 0.0000000002 0"/>
+                  <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_motor_black_mat" type="mesh" mesh="link6" />
+                  <geom pos="0 0 0" rgba="0 0 0 0" group="3" contype="1" conaffinity="1" type="mesh" mesh="link6" />
+                  <body name="gripper_end" pos="0 0 0.16621" quat="-0.0000026 0.7071055 0.0000026 0.7071081">
+                    <inertial pos="-0.1127517 0.0001284 -0.0000057" mass="0.65" fullinertia="0.00037354 0.0001583 0.00045353 -0.00000011 0.0000005 0.00000348"/>
+                    <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_seeed_green_mat" type="mesh" mesh="pla7_green" />
+                    <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_anodized_silver_mat" type="mesh" mesh="cnc7" />
+                    <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_motor_black_mat" type="mesh" mesh="motor_7" />
+                    <geom pos="0 0 0" rgba="0 0 0 0" group="3" contype="1" conaffinity="1" type="mesh" mesh="gripper_end" />
+                    <!-- 夹爪驱动关节：通过 equality 与 joint_left / joint_right 联动。
+                         axis="0 1 0" 沿 gripper_end 局部 -Y，即世界 Y 负方向，
+                         因此 joint7 增大时 left 向 -Y、right 向 +Y 张开。 -->
+                    <body name="gripper_coupler" pos="0 0 0">
+                      <joint name="joint7" type="slide" axis="0 1 0" limited="true" range="0 0.05" damping="1.0" frictionloss="0.1"/>
+                      <inertial pos="0 0 0" mass="0.001" diaginertia="0.000001 0.000001 0.000001"/>
+                    </body>
+                    <body name="gripper_left" pos="-0.041939 -0.0000734 0" quat="0.4999982 0.5 -0.5 0.5000018">
+                      <joint name="joint_left" type="slide" axis="0 0 1" limited="true" range="0 0.05" damping="5.0" frictionloss="0.5"/>
+                      <inertial pos="-0.0021801 0.018709 0.0093219" mass="0.0752" diaginertia="0.0000109878 0.0000095015 0.0000093078"/>
+                      <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_pla_black_mat" type="mesh" mesh="pla_left" />
+                      <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_anodized_silver_mat" type="mesh" mesh="cnc_left" />
+                      <geom pos="0 0 0" rgba="0 0 0 0" group="3" contype="1" conaffinity="1" type="mesh" mesh="pla_left" friction="2.5 0.005 0.0001" solref="0.001 1" solimp="0.99 0.99 0.001" />
+                      <!-- 抓取面：与 mesh 内侧面重合的薄 box，提供稳定的 box-box 接触 -->
+                      <geom name="gripper_left_pad" pos="0 -0.0025 -0.001" rgba="0.2 0.8 0.2 0.3" group="3" contype="1" conaffinity="1" type="box" size="0.019 0.0395 0.001" friction="2.5 0.005 0.0001" solref="0.001 1" solimp="0.99 0.99 0.001" />
+                    </body>
+                    <body name="gripper_right" pos="-0.041939 0.0000734 0" quat="0.4999982 -0.5 -0.5 -0.5000018">
+                      <joint name="joint_right" type="slide" axis="0 0 1" limited="true" range="0 0.0715" damping="5.0" frictionloss="0.5"/>
+                      <inertial pos="0.0021801 -0.018709 0.0093219" mass="0.0752" diaginertia="0.0000109878 0.0000095015 0.0000093078"/>
+                      <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_pla_black_mat" type="mesh" mesh="pla_right" />
+                      <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_anodized_silver_mat" type="mesh" mesh="cnc_right" />
+                      <geom pos="0 0 0" rgba="0 0 0 0" group="3" contype="1" conaffinity="1" type="mesh" mesh="pla_right" friction="2.5 0.005 0.0001" solref="0.001 1" solimp="0.99 0.99 0.001" />
+                      <!-- 抓取面：与 mesh 内侧面重合的薄 box，提供稳定的 box-box 接触 -->
+                      <geom name="gripper_right_pad" pos="0 0.0025 -0.001" rgba="0.2 0.8 0.2 0.3" group="3" contype="1" conaffinity="1" type="box" size="0.019 0.0395 0.001" friction="2.5 0.005 0.0001" solref="0.001 1" solimp="0.99 0.99 0.001" />
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <equality>
+    <!-- joint7 与左右夹爪直线位移 1:1 联动。
+         solref/solimp 使约束更硬，减少臂运动时 left/right 相对 joint7 的滞后。 -->
+    <joint joint1="joint7" joint2="joint_left"  polycoef="0 1 0 0 0" solref="0.001 1" solimp="0.99 0.99 0.001"/>
+    <joint joint1="joint7" joint2="joint_right" polycoef="0 1 0 0 0" solref="0.001 1" solimp="0.99 0.99 0.001"/>
+  </equality>
+  <actuator>
+    <!-- 臂关节作动器使用 <motor>：由 Python 中的 POS_VEL 串级控制器驱动。
+         ctrl 为关节力矩（N·m），ctrlrange 对应真实电机输出力矩限制。
+         位置环/速度环参数在代码中配置，与真实电机 POS_VEL 模式一致。 -->
+    <motor name="joint1_motor" joint="joint1" ctrlrange="-36 36" gear="1" />
+    <motor name="joint2_motor" joint="joint2" ctrlrange="-36 36" gear="1" />
+    <motor name="joint3_motor" joint="joint3" ctrlrange="-36 36" gear="1" />
+    <motor name="joint4_motor" joint="joint4" ctrlrange="-14 14" gear="1" />
+    <motor name="joint5_motor" joint="joint5" ctrlrange="-14 14" gear="1" />
+    <motor name="joint6_motor" joint="joint6" ctrlrange="-14 14" gear="1" />
+    <!-- 夹爪由 joint7 驱动；joint_left / joint_right 通过 equality 约束与 joint7 联动。
+         这里给 joint7 加 <motor>，由 Python 中的 PD 控制器驱动。
+         注意：若用于 real-to-sim，此作动器应禁用，改由真实电机位置直接驱动。 -->
+    <motor name="joint7_motor" joint="joint7" ctrlrange="-500 500" gear="1" />
+  </actuator>
+</mujoco>
