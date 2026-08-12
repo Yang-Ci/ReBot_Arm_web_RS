@@ -1,0 +1,3 @@
+motorbridge>=0.4.9,<1
+pin>=3.9.0,<5
+meshcat>=0.3.2,<1

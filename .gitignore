@@ -1,0 +1,12 @@
+rebotarm_ros2/build/
+rebotarm_ros2/install/
+rebotarm_ros2/log/
+rebotarm_ros2/third_party/
+rebotarm_ros2/.venv/
+/build/
+/install/
+/log/
+**/__pycache__/
+**/*.pyc
+reBotArm_simulator-RS/.certs/
+reBotArm_simulator-RS/.env

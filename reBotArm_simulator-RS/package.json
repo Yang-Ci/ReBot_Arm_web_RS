@@ -1,0 +1,12 @@
+{
+  "name": "rebotarm-simulator-rs",
+  "version": "1.0.0",
+  "description": "reBot Arm B601-RS standalone web simulator",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "start:https": "powershell -ExecutionPolicy Bypass -Command \"$env:HTTPS='1'; $env:PORT='3444'; node server.js\"",
+    "cert:dev": "pwsh -ExecutionPolicy Bypass -File scripts/create-dev-cert.ps1"
+  }
+}

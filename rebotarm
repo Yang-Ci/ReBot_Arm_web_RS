@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+SCRIPTS_DIR="${ROOT_DIR}/scripts"
+WEB_DIR="${ROOT_DIR}/reBotArm_simulator-RS"
+ENV_SCRIPT="${SCRIPTS_DIR}/rs_env.sh"
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}/rebotarm-rs-${UID}"
+PID_FILE="${RUNTIME_DIR}/managed.pids"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  ./rebotarm start web          # Start rosbridge + web server
+  ./rebotarm start rs           # Start RS hardware controller (requires confirmation)
+  ./rebotarm start rs_sim       # Start RS MuJoCo simulation
+  ./rebotarm doctor             # Check dependencies and generated files
+  ./rebotarm stop               # Stop managed processes
+  ./rebotarm status             # Show managed process status
+
+Modes are intentionally separate.
+EOF
+}
+
+load_ros() {
+  [[ -f "${ENV_SCRIPT}" ]] || { echo "Missing ${ENV_SCRIPT}; run scripts/setup_rs_workspace.sh first." >&2; exit 1; }
+  source "${ENV_SCRIPT}"
+}
+
+start_web() {
+  load_ros
+  mkdir -p "${RUNTIME_DIR}"
+  : >"${PID_FILE}"
+  PIDS=()
+  stop_children() {
+    for pid in "${PIDS[@]:-}"; do kill -INT -- "-${pid}" 2>/dev/null || true; done
+    wait "${PIDS[@]:-}" 2>/dev/null || true
+    : >"${PID_FILE}"
+  }
+  trap 'stop_children' EXIT INT TERM
+
+  local rosbridge_port="${ROSBRIDGE_PORT:-9090}"
+  if ss -ltn "sport = :${rosbridge_port}" 2>/dev/null | grep -q LISTEN; then
+    local pid process_state
+    pid="$(ss -ltnp "sport = :${rosbridge_port}" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1)"
+    process_state="$(ps -p "${pid:-0}" -o stat= 2>/dev/null || true)"
+    if [[ "${process_state}" == *T* ]]; then
+      printf 'ERROR: rosbridge on port %s is suspended (pid=%s, state=%s). Resume it and stop it with Ctrl+C before retrying.\n' \
+        "${rosbridge_port}" "${pid}" "${process_state}" >&2
+      exit 1
+    elif [[ -n "${pid}" ]] && ps -p "${pid}" -o args= 2>/dev/null | grep -q 'rosbridge_websocket'; then
+      printf 'ROS WebSocket: ws://localhost:%s (reuse existing rosbridge, pid=%s)\n' "${rosbridge_port}" "${pid}"
+    else
+      printf 'ERROR: port %s is occupied by another process (pid=%s). Stop it or set ROSBRIDGE_PORT to continue.\n' \
+        "${rosbridge_port}" "${pid:-unknown}" >&2
+      exit 1
+    fi
+  else
+    setsid ros2 launch rosbridge_server rosbridge_websocket_launch.xml port:="${rosbridge_port}" address:="${ROSBRIDGE_ADDRESS:-0.0.0.0}" &
+    PIDS+=("$!"); printf '%s %s\n' "$!" rosbridge >>"${PID_FILE}"
+    printf 'ROS WebSocket: ws://localhost:%s (started by this command)\n' "${rosbridge_port}"
+  fi
+
+  (cd "${WEB_DIR}" && exec setsid node server.js) &
+  PIDS+=("$!"); printf '%s %s\n' "$!" web-server >>"${PID_FILE}"
+  printf 'Web: http://localhost:3002\nCtrl+C stops processes started by this command.\n'
+  wait -n "${PIDS[@]}"
+}
+
+start_rs() {
+  if [[ "${REBOTARM_RS_HARDWARE_CONFIRM:-}" != "I_UNDERSTAND_RS_WILL_MOVE" ]]; then
+    echo "Hardware launch blocked." >&2
+    echo "Confirm the work area is clear and a physical emergency stop is available." >&2
+    echo "Then set REBOTARM_RS_HARDWARE_CONFIRM=I_UNDERSTAND_RS_WILL_MOVE." >&2
+    exit 2
+  fi
+  exec "${SCRIPTS_DIR}/start_rs_hardware.sh"
+}
+
+start_rs_sim() {
+  exec "${SCRIPTS_DIR}/start_rs_sim.sh" "$@"
+}
+
+run_doctor() {
+  exec "${ROOT_DIR}/setup.sh" --check
+}
+
+stop_managed() {
+  [[ -f "${PID_FILE}" ]] || { echo 'No managed background processes.'; return; }
+  while read -r pid name; do
+    if kill -0 "${pid}" 2>/dev/null; then
+      printf 'Stopping %s (pid=%s)\n' "${name}" "${pid}"
+      kill -INT -- "-${pid}" 2>/dev/null || kill -INT "${pid}" 2>/dev/null || true
+    fi
+  done <"${PID_FILE}"
+  sleep 2
+  while read -r pid name; do
+    kill -KILL -- "-${pid}" 2>/dev/null || kill -KILL "${pid}" 2>/dev/null || true
+  done <"${PID_FILE}"
+  : >"${PID_FILE}"
+  echo 'Managed processes stopped.'
+}
+
+show_status() {
+  printf '%s\n' '[managed processes]'
+  if [[ -f "${PID_FILE}" ]]; then
+    while read -r pid name; do
+      if kill -0 "${pid}" 2>/dev/null; then printf 'RUNNING pid=%s %s\n' "${pid}" "${name}"; else printf 'STOPPED pid=%s %s\n' "${pid}" "${name}"; fi
+    done <"${PID_FILE}"
+  else
+    printf 'none\n'
+  fi
+  printf '%s\n' '[ports]'
+  ss -ltnp 2>/dev/null | grep -E ':3002|:9090|:8081' || true
+  printf '%s\n' '[CAN]'
+  ip -details link show can0 2>/dev/null || printf 'no can0 interface\n'
+}
+
+case "${1:-}" in
+  start)
+    case "${2:-}" in
+      web) start_web ;;
+      rs) start_rs ;;
+      rs_sim) shift 2; start_rs_sim "$@" ;;
+      *) echo "Unknown start target: ${2:-}" >&2; usage; exit 1 ;;
+    esac
+    ;;
+  doctor) run_doctor ;;
+  stop) stop_managed ;;
+  status) show_status ;;
+  *) usage; exit 1 ;;
+esac
