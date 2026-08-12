@@ -1595,7 +1595,9 @@
   const IKSolver = {
     jointNames: jointDefs.filter((joint) => joint.name !== 'gripper').map((joint) => joint.name),
     gain: 12,
-    damping: 0.035,
+    minDamping: 0.018,
+    maxDamping: 0.075,
+    singularityThreshold: 0.08,
     maxJointSpeed: 2.8,
 
     servoStep(target, dt, options) {
@@ -1656,22 +1658,39 @@
     },
 
     solveDampedLeastSquares(j, error) {
-      const lambda2 = this.damping * this.damping;
+      const gram = [
+        [dotRows(j[0], j[0]), dotRows(j[0], j[1]), dotRows(j[0], j[2])],
+        [dotRows(j[1], j[0]), dotRows(j[1], j[1]), dotRows(j[1], j[2])],
+        [dotRows(j[2], j[0]), dotRows(j[2], j[1]), dotRows(j[2], j[2])]
+      ];
+      // det(JJ^T) normalized by its mean eigenvalue is scale-independent:
+      // close to zero means the TCP Jacobian is approaching a singular pose.
+      const scale = Math.max((gram[0][0] + gram[1][1] + gram[2][2]) / 3, 1e-9);
+      const normalizedDeterminant = Math.max(0, determinant3x3(gram)) /
+        Math.max(scale * scale * scale, 1e-12);
+      const singularity = clamp(
+        1 - normalizedDeterminant / this.singularityThreshold,
+        0,
+        1
+      );
+      const damping = this.minDamping +
+        (this.maxDamping - this.minDamping) * singularity * singularity;
+      const lambda2 = damping * damping;
       const a = [
         [
-          dotRows(j[0], j[0]) + lambda2,
-          dotRows(j[0], j[1]),
-          dotRows(j[0], j[2])
+          gram[0][0] + lambda2,
+          gram[0][1],
+          gram[0][2]
         ],
         [
-          dotRows(j[1], j[0]),
-          dotRows(j[1], j[1]) + lambda2,
-          dotRows(j[1], j[2])
+          gram[1][0],
+          gram[1][1] + lambda2,
+          gram[1][2]
         ],
         [
-          dotRows(j[2], j[0]),
-          dotRows(j[2], j[1]),
-          dotRows(j[2], j[2]) + lambda2
+          gram[2][0],
+          gram[2][1],
+          gram[2][2] + lambda2
         ]
       ];
       const y = solve3x3(a, [error.x, error.y, error.z]);
@@ -1682,6 +1701,14 @@
 
   function dotRows(a, b) {
     return a.reduce((sum, value, index) => sum + value * (b[index] || 0), 0);
+  }
+
+  function determinant3x3(a) {
+    return (
+      a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) -
+      a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) +
+      a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0])
+    );
   }
 
   function solve3x3(a, b) {

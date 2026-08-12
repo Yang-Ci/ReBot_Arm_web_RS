@@ -167,6 +167,9 @@
  const FEEDBACK_RENDER_MAX_MS = 120;
  const JOINT_FEEDBACK_DEADBAND_RAD = 0.0025;
  const GRIPPER_FEEDBACK_DEADBAND_M = 0.00025;
+ const HARDWARE_FEEDBACK_MIN_CUTOFF_HZ = 3.0;
+ const HARDWARE_FEEDBACK_SPEED_BETA = 4.0;
+ const HARDWARE_FEEDBACK_DERIVATIVE_CUTOFF_HZ = 1.0;
  const MIRROR_HOLD_MS = 1800;
  let latestJointPositions = null;
  let rosBackend = 'unknown';
@@ -190,6 +193,7 @@
   let gravityStatusSource = 'initial';
   let gravityStatusPollInFlight = false;
   let feedbackReplayActive = false;
+  const hardwareFeedbackFilters = new Map();
   let feedbackRenderFrame = 0;
   let feedbackRenderCurrent = null;
   let feedbackRenderStart = null;
@@ -350,8 +354,50 @@
     }
     if (useDriverState) updateFeedbackError(next);
 
-    if (useDriverState) mirrorJointAngles(next);
+    if (useDriverState) {
+      const displayAngles = TARGET_KEY === 'hardware'
+        ? filterHardwareJointAngles(next, performance.now())
+        : next;
+      mirrorJointAngles(displayAngles);
+    }
     updateDiagnostics();
+  }
+
+  function lowPassAlpha(cutoffHz, dtSeconds) {
+    const cutoff = Math.max(0.01, Number(cutoffHz) || 0.01);
+    const dt = Math.max(0.001, Number(dtSeconds) || 0.001);
+    return 1 - Math.exp(-2 * Math.PI * cutoff * dt);
+  }
+
+  function filterHardwareJointAngles(next, timestamp) {
+    const filtered = {};
+    Object.entries(next || {}).forEach(([name, rawValue]) => {
+      const raw = Number(rawValue);
+      if (!Number.isFinite(raw)) return;
+      let state = hardwareFeedbackFilters.get(name);
+      if (!state) {
+        state = { raw, value: raw, derivative: 0, at: timestamp };
+        hardwareFeedbackFilters.set(name, state);
+        filtered[name] = raw;
+        return;
+      }
+
+      const dt = Math.max(0.005, Math.min(0.2, (timestamp - state.at) / 1000));
+      const rawDerivative = (raw - state.raw) / dt;
+      const derivativeAlpha = lowPassAlpha(
+        HARDWARE_FEEDBACK_DERIVATIVE_CUTOFF_HZ,
+        dt
+      );
+      state.derivative += derivativeAlpha * (rawDerivative - state.derivative);
+      const cutoff = HARDWARE_FEEDBACK_MIN_CUTOFF_HZ +
+        HARDWARE_FEEDBACK_SPEED_BETA * Math.abs(state.derivative);
+      const valueAlpha = lowPassAlpha(cutoff, dt);
+      state.value += valueAlpha * (raw - state.value);
+      state.raw = raw;
+      state.at = timestamp;
+      filtered[name] = state.value;
+    });
+    return filtered;
   }
 
   function handleMujocoJointStates(msg) {
@@ -1026,6 +1072,7 @@
     lastPublishedCommandValues.clear();
     lastObservedSimCommand.clear();
     lastSent.clear();
+    hardwareFeedbackFilters.clear();
     if (window.reBotSim && typeof window.reBotSim.setGhostVisible === 'function') {
       window.reBotSim.setGhostVisible(false);
     }
