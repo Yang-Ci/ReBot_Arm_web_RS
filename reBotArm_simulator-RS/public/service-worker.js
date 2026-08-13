@@ -1,16 +1,17 @@
-const CACHE_NAME = 'rebot-arm-rs-pwa-v77-ctrl32';
+const CACHE_NAME = 'rebot-arm-rs-pwa-v83-guide43';
 const APP_SHELL = [
   '/',
   '/index.html',
   '/manifest.webmanifest',
   '/favicon.png',
-  '/css/rebot-sim.css?v=20260812-rs-ctrl32',
+  '/css/rebot-sim.css?v=20260813-rs-guide43',
   '/js/pwa.js?v=20260812-rs-ctrl32',
-  '/js/i18n.js?v=20260812-rs-ctrl32',
+  '/js/i18n.js?v=20260813-rs-guide43',
   '/js/rebot-sim.js?v=20260812-rs-ctrl32',
   '/js/ros/rebot-ros-client.js?v=20260812-rs-ctrl32',
   '/js/control-mode.js?v=20260812-rs-ctrl32',
   '/js/ros/rebot-ros-ui.js?v=20260812-rs-ctrl32',
+  '/js/rebot-llm.js?v=20260813-rs-guide43',
   '/lib/three-r128.min.js',
   '/lib/STLLoader-umd.js',
   '/lib/URDFLoader.js',

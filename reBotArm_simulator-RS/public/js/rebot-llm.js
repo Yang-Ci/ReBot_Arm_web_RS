@@ -1,4 +1,20 @@
 (function () {
+  const TEXT_AGENT_START_GUIDE = [
+    '网页只能连接 text-agent，不能自动启动虚拟机里的服务。',
+    '',
+    '请在运行仿真的 Ubuntu 虚拟机中打开新终端，依次执行：',
+    '  cd /home/robot/reBot_Arm_Mujoco-RS',
+    "  export DASHSCOPE_API_KEY='替换成你的 Key'",
+    "  export REBOTARM_LLM_MODEL='qwen-plus'",
+    '  ./scripts/start_rs_text_agent.sh',
+    '',
+    '保持该终端运行。看到 listening on http://0.0.0.0:8082 后，可在另一终端检查：',
+    '  curl http://127.0.0.1:8082/health',
+    '',
+    '返回包含 "ok": true 后，回到本页再次点击“连接 AI 助手”。',
+    '仿真/MCP 也需要保持运行（通常先执行 ./scripts/start_rs_sim.sh）。'
+  ].join('\n');
+
   class ReBotLLMUI {
     constructor() {
       this.started = false;
@@ -35,7 +51,7 @@
       // 初始加载配置（仅用于显示）
       fetch('/api/mcp/config').then(r => r.json()).then(cfg => {
         this.config = cfg;
-        this.elements.message.textContent = `代理后端: ${cfg.textAgentUrl}  ·  MCP: ${cfg.mcpUrl}`;
+        this.elements.message.textContent = `连接地址: ${cfg.textAgentUrl}  ·  MCP: ${cfg.mcpUrl}。首次使用请展开下方启动说明。`;
       }).catch(() => {
         this.elements.message.textContent = '加载配置失败';
       });
@@ -80,7 +96,7 @@
         console.error('[LLM UI] start failed:', e);
         this.updateStatus('启动失败');
         this.elements.message.textContent = `连接失败: ${e.message}`;
-        this.addMessage('error', `连接失败: ${e.message}\n请确认虚拟机中已启动:\n  python3 -m rebotarm_agent.rebotarm_text_agent --http-server --yes`);
+        this.addMessage('error', `连接失败: ${e.message}\n\n${TEXT_AGENT_START_GUIDE}`);
         this.elements.startBtn.disabled = false;
       }
     }

@@ -1113,6 +1113,49 @@ input[type="range"]::-webkit-slider-thumb {
   margin-top: 10px;
 }
 
+.llm-setup-guide {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(126, 200, 224, 0.24);
+  border-radius: 7px;
+  color: var(--muted);
+  background: rgba(126, 200, 224, 0.06);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.llm-setup-guide summary {
+  color: #d7fff4;
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.llm-setup-guide ol {
+  margin: 10px 0 0;
+  padding-left: 20px;
+}
+
+.llm-setup-guide li + li {
+  margin-top: 8px;
+}
+
+.llm-setup-guide pre {
+  margin: 6px 0;
+  padding: 9px 10px;
+  overflow-x: auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: #d7fff4;
+  background: rgba(0, 0, 0, 0.28);
+  white-space: pre;
+  user-select: text;
+}
+
+.llm-guide-note {
+  margin: 10px 0 0;
+  color: #ffe0b0;
+}
+
 .llm-section .primary-btn {
   margin-top: 0;
 }

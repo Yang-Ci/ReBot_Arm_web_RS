@@ -12,7 +12,7 @@
   <link rel="icon" type="image/png" href="/favicon.png">
   <link rel="apple-touch-icon" href="/favicon.png">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="stylesheet" href="/css/rebot-sim.css?v=20260812-rs-ctrl32">
+  <link rel="stylesheet" href="/css/rebot-sim.css?v=20260813-rs-guide43">
 </head>
 <body>
   <main class="app-shell">
@@ -255,10 +255,31 @@
           </div>
         </div>
         <div class="button-grid">
-          <button type="button" id="llm-start" data-i18n="llm.start" class="primary-btn">启动 AI 助手</button>
+          <button type="button" id="llm-start" data-i18n="llm.start" class="primary-btn">连接 AI 助手</button>
           <button type="button" id="llm-stop" data-i18n="llm.stop" disabled>停止</button>
         </div>
-        <p class="llm-message" id="llm-message" data-i18n="llm.message">点击启动按钮，系统将自动连接 MCP 并启用 AI 控制。</p>
+        <p class="llm-message" id="llm-message" data-i18n="llm.message">首次使用请先按下方说明启动 text-agent，再点击连接。</p>
+        <details class="llm-setup-guide">
+          <summary data-i18n="llm.guideTitle">第一次使用：怎样启动 AI 助手？</summary>
+          <ol>
+            <li data-i18n="llm.guideTerminal">在运行仿真的 Ubuntu 虚拟机里打开一个新终端。</li>
+            <li>
+              <span data-i18n="llm.guideStart">进入项目目录，配置大模型 Key，然后启动服务：</span>
+              <pre><code>cd /home/robot/reBot_Arm_Mujoco-RS
+export DASHSCOPE_API_KEY='替换成你的 Key'
+export REBOTARM_LLM_MODEL='qwen-plus'
+./scripts/start_rs_text_agent.sh</code></pre>
+            </li>
+            <li data-i18n="llm.guideKeepOpen">保持这个终端运行；看到“listening on http://0.0.0.0:8082”表示启动成功。</li>
+            <li>
+              <span data-i18n="llm.guideCheck">可在另一个终端检查：</span>
+              <pre><code>curl http://127.0.0.1:8082/health</code></pre>
+              <span data-i18n="llm.guideExpected">应返回包含 “ok: true” 的结果。</span>
+            </li>
+            <li data-i18n="llm.guideConnect">回到网页点击“连接 AI 助手”，连接后即可输入“查询机械臂状态”“抓取红色物块”等指令。</li>
+          </ol>
+          <p class="llm-guide-note" data-i18n="llm.guideMcp">注意：仿真与 MCP 服务也必须保持运行；通常先执行 ./scripts/start_rs_sim.sh。</p>
+        </details>
      </div>
 
       <div class="section camera-section">
@@ -465,13 +486,13 @@
   <script src="/lib/STLLoader-umd.js"></script>
   <script src="/lib/URDFLoader.js"></script>
   <script src="/js/pwa.js?v=20260812-rs-ctrl32"></script>
-  <script src="/js/i18n.js?v=20260812-rs-ctrl32"></script>
+  <script src="/js/i18n.js?v=20260813-rs-guide43"></script>
   <script src="/js/ros/rebot-ros-client.js?v=20260812-rs-ctrl37"></script>
   <script src="/js/rebot-sim.js?v=20260812-rs-ctrl37"></script>
   <script src="/js/control-mode.js?v=20260812-rs-ctrl32"></script>
   <script src="/js/ros/rebot-ros-ui.js?v=20260812-rs-ctrl37"></script>
   <script src="/js/motorbridge/rebot-motorbridge-client.js?v=20260812-rs-ctrl32"></script>
   <script src="/js/motorbridge/rebot-motorbridge-ui.js?v=20260812-rs-ctrl32"></script>
-  <script src="/js/rebot-llm.js?v=20260812-rs-ctrl32"></script>
+  <script src="/js/rebot-llm.js?v=20260813-rs-guide43"></script>
 </body>
 </html>
