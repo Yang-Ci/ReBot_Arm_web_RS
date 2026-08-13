@@ -1,0 +1,57 @@
+<mujoco model="rebot_scene">
+  <include file="00_arm_rs_asm_v3.xml"/>
+
+  <!-- 提高接触求解精度，减少夹爪闭合时的抖动 -->
+  <option timestep="0.001" iterations="100" solver="Newton" integrator="Euler"/>
+
+  <!-- 禁用相邻连杆之间的自碰撞，避免 URDF mesh 轻微重叠导致关节被锁定 -->
+  <contact>
+    <exclude body1="world" body2="link1"/>
+    <exclude body1="base_link" body2="link1"/>
+    <exclude body1="link1" body2="link2"/>
+    <exclude body1="link2" body2="link3"/>
+    <exclude body1="link2" body2="link5"/>
+    <exclude body1="link3" body2="link4"/>
+    <exclude body1="link4" body2="link5"/>
+    <exclude body1="link5" body2="link6"/>
+    <exclude body1="gripper_left" body2="gripper_right"/>
+  </contact>
+
+  <statistic center="0.15 0 0.15" extent="0.5"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="120" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane"/>
+
+    <!-- 世界坐标系原点坐标轴 -->
+    <body name="world_frame" pos="0 0 0">
+      <geom name="axis_x" type="cylinder" size="0.005" fromto="0 0 0 0.3 0 0" rgba="1 0 0 1" contype="0" conaffinity="0"/>
+      <geom name="axis_y" type="cylinder" size="0.005" fromto="0 0 0 0 0.3 0" rgba="0 1 0 1" contype="0" conaffinity="0"/>
+      <geom name="axis_z" type="cylinder" size="0.005" fromto="0 0 0 0 0 0.3" rgba="0 0 1 1" contype="0" conaffinity="0"/>
+    </body>
+
+    <!-- 放置方块的台子 -->
+    <body name="table" pos="0.35 0 0.05">
+      <geom name="table_geom" type="box" size="0.1 0.1 0.05" rgba="0.4 0.4 0.4 1" friction="1.0 0.005 0.0001"/>
+    </body>
+
+    <!-- 可抓取方块 -->
+    <body name="cube" pos="0.35 0 0.115">
+      <freejoint name="cube_freejoint"/>
+      <geom name="cube_geom" type="box" size="0.015 0.015 0.015" rgba="1 0.5 0 1" mass="0.1" friction="2.0 0.005 0.0001"/>
+    </body>
+
+  </worldbody>
+</mujoco>

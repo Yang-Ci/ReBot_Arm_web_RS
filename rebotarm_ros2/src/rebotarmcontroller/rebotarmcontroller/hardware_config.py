@@ -43,9 +43,8 @@ def _ensure_rebot_sdk_in_syspath() -> Path:
     root = _workspace_root() / "third_party" / "reBotArm_control_py"
     if not (root / "reBotArm_control_py").is_dir():
         raise FileNotFoundError(
-            f"Cannot find reBotArm_control_py at {root}. Clone it first:\n"
-            "  git clone https://github.com/vectorBH6/reBotArm_control_py.git "
-            "third_party/reBotArm_control_py"
+            f"Cannot find the vendored reBotArm_control_py at {root}. "
+            "Restore rebotarm_ros2/third_party from the main repository."
         )
     root_str = str(root)
     if root_str not in sys.path:
@@ -154,6 +153,10 @@ def _add_runtime_config(data: dict[str, Any]) -> None:
         "gravity_compensation": {
             "kp": _gravity_gain(data, arm_joints, gravity_config, "kp"),
             "kd": _gravity_gain(data, arm_joints, gravity_config, "kd"),
+            "transition_duration": _positive_scalar(
+                gravity_config.get("transition_duration", 0.5),
+                "gravity_compensation.transition_duration",
+            ),
             "joint_direction": _runtime_vector(
                 gravity_config.get("joint_direction", 1.0),
                 n,

@@ -9,10 +9,6 @@ REBOTARM_WS="${REBOTARM_RS_ROOT}/rebotarm_ros2"
 REBOTARM_VENV="${REBOTARM_WS}/.venv"
 REBOTARM_SDK_DIR="${REBOTARM_WS}/third_party/reBotArm_control_py"
 REBOTARM_MUJOCO_DIR="${REBOTARM_WS}/third_party/reBot-B601-RS-for-mujoco_sim"
-REBOTARM_SDK_REF="40ab6ce58fec3c58cb603efb3f30240d6f5849e4"
-REBOTARM_MUJOCO_REF="1249cb6efdf393ba636056fc41df30dc6ba389aa"
-REBOTARM_SDK_PATCH="${REBOTARM_RS_ROOT}/patches/rebotarm_control_py_rs.patch"
-REBOTARM_MUJOCO_OVERRIDE="${REBOTARM_RS_ROOT}/vendor_overrides/reBot-B601-RS-for-mujoco_sim/assets/00_arm_rs_asm_v3"
 
 if [[ ! -f "${REBOTARM_ROS_SETUP}" ]]; then
   echo "ROS 2 environment not found: ${REBOTARM_ROS_SETUP}" >&2
@@ -36,40 +32,21 @@ if [[ "${REBOTARM_RESTORE_NOUNSET}" == true ]]; then
 fi
 unset REBOTARM_RESTORE_NOUNSET
 
-if [[ ! -d "${REBOTARM_SDK_DIR}/reBotArm_control_py" ]]; then
-  mkdir -p "${REBOTARM_WS}/third_party"
-  git clone \
-    https://github.com/vectorBH6/reBotArm_control_py.git \
-    "${REBOTARM_SDK_DIR}"
-  git -C "${REBOTARM_SDK_DIR}" checkout --detach "${REBOTARM_SDK_REF}"
-fi
-
-if [[ "$(git -C "${REBOTARM_SDK_DIR}" rev-parse HEAD)" != "${REBOTARM_SDK_REF}" ]]; then
-  echo "Warning: reBotArm SDK is not at the validated revision ${REBOTARM_SDK_REF}." >&2
-fi
-
-if [[ ! -f "${REBOTARM_MUJOCO_DIR}/assets/00_arm_rs_asm_v3/scene.xml" ]]; then
-  git clone \
-    https://github.com/LAN-GER/reBot-B601-RS-for-mujoco_sim.git \
-    "${REBOTARM_MUJOCO_DIR}"
-  git -C "${REBOTARM_MUJOCO_DIR}" checkout --detach "${REBOTARM_MUJOCO_REF}"
-fi
-
-if git -C "${REBOTARM_SDK_DIR}" apply --check "${REBOTARM_SDK_PATCH}"; then
-  git -C "${REBOTARM_SDK_DIR}" apply "${REBOTARM_SDK_PATCH}"
-elif ! git -C "${REBOTARM_SDK_DIR}" apply --reverse --check "${REBOTARM_SDK_PATCH}"; then
-  echo "RS SDK patch cannot be applied cleanly: ${REBOTARM_SDK_PATCH}" >&2
+if [[ ! -f "${REBOTARM_SDK_DIR}/reBotArm_control_py/__init__.py" ]]; then
+  echo "Vendored reBotArm control SDK is missing: ${REBOTARM_SDK_DIR}" >&2
   exit 1
 fi
 
-if [[ "$(git -C "${REBOTARM_MUJOCO_DIR}" rev-parse HEAD)" != "${REBOTARM_MUJOCO_REF}" ]]; then
-  echo "Warning: RS MuJoCo source is not at the validated revision ${REBOTARM_MUJOCO_REF}." >&2
+if [[ ! -f "${REBOTARM_MUJOCO_DIR}/assets/00_arm_rs_asm_v3/scene.xml" ]]; then
+  echo "Vendored RS MuJoCo source is missing: ${REBOTARM_MUJOCO_DIR}" >&2
+  exit 1
 fi
 
-cp "${REBOTARM_MUJOCO_OVERRIDE}/00_arm_rs_asm_v3.xml" \
-  "${REBOTARM_MUJOCO_DIR}/assets/00_arm_rs_asm_v3/00_arm_rs_asm_v3.xml"
-cp "${REBOTARM_MUJOCO_OVERRIDE}/meshes/"*.STL \
-  "${REBOTARM_MUJOCO_DIR}/assets/00_arm_rs_asm_v3/meshes/"
+if find "${REBOTARM_WS}/third_party" -mindepth 2 -maxdepth 2 -name .git -print -quit | grep -q .; then
+  echo "Nested Git metadata found under rebotarm_ros2/third_party." >&2
+  echo "Vendor sources must be ordinary files owned by the main repository." >&2
+  exit 1
+fi
 
 "${REBOTARM_VENV}/bin/python" -m pip install --upgrade pip
 "${REBOTARM_VENV}/bin/python" -m pip install \

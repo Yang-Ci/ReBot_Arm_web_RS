@@ -1,4 +1,5 @@
 mujoco>=3.10,<4
 numpy>=2.3,<3
 scipy>=1.16,<2
+qpsolvers[osqp]>=4.8,<5
 fastmcp>=3.4,<4

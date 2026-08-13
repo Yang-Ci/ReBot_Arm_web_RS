@@ -96,21 +96,10 @@ ip -details link show can0
 
 请参考[ROS官方下载文档](https://www.ros.org/blog/getting-started/)选择适合的版本进行安装。
 
-### Step 2. 获取 ROS2 源码
+### Step 2. 使用集成的 ROS2 工作区
 
-优先使用 Seeed-Projects 官方仓库：
-
-```bash
-git clone https://github.com/Seeed-Projects/reBotArmController_ROS2.git rebotarm_ros2
-cd rebotarm_ros2
-```
-
-也可以使用当前开发仓库：
-
-```bash
-git clone https://github.com/EclipseaHime017/reBotArmController_ROS2.git rebotarm_ros2
-cd rebotarm_ros2
-```
+本目录已经包含在 `ReBot_Arm_web_RS` 父仓库中。只需 clone 一次父仓库，再进入
+`rebotarm_ros2`，无需另外获取 ROS 仓库。
 
 ### Step 3. 安装 motorbridge
 
@@ -120,13 +109,10 @@ cd rebotarm_ros2
 python3 -m pip install --user --index-url https://pypi.org/simple motorbridge
 ```
 
-### Step 4. 获取底层 SDK
+### Step 4. 使用本地底层 SDK
 
-
-```bash
-mkdir -p third_party
-git clone https://github.com/vectorBH6/reBotArm_control_py.git third_party/reBotArm_control_py
-```
+`third_party/reBotArm_control_py` 已经作为父仓库的普通文件提交。不要在该目录中创建嵌套
+Git 仓库。
 
 ## 构建工作空间
 

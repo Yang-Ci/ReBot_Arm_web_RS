@@ -19,7 +19,7 @@ def generate_launch_description():
             DeclareLaunchArgument("stale_timeout", default_value="1.0"),
             DeclareLaunchArgument("use_viewer", default_value="false"),
             DeclareLaunchArgument("gripper_kp", default_value="300.0"),
-            DeclareLaunchArgument("gripper_kd", default_value="120.0"),
+            DeclareLaunchArgument("gripper_kd", default_value="40.0"),
             DeclareLaunchArgument("gripper_tau_limit", default_value="150.0"),
             DeclareLaunchArgument("enable_task_tools", default_value="true"),
             Node(

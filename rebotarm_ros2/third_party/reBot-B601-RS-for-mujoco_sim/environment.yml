@@ -1,0 +1,24 @@
+name: rebot-b601-rs-sim
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - numpy
+  - scipy
+  - pyyaml
+  - mujoco>=3.0
+  - pinocchio
+  - meshcat-python
+  - tornado
+  - pytest
+  - pip
+  - pip:
+    # Additional pip-only packages can be listed here.
+    # The third-party SDK dependencies are installed from its pyproject.toml
+    # from the parent repository's sibling directory: ../reBotArm_control_py
+    - qpsolvers[osqp]
+
+# 避免系统 ROS PYTHONPATH 污染 conda 环境（例如加载旧版 pinocchio）
+variables:
+  PYTHONPATH: ""

@@ -33,6 +33,7 @@
     <material name="rs_red" rgba="0.92 0.08 0.06 1"/>
     <material name="rs_blue" rgba="0.03 0.42 0.94 1"/>
     <material name="rs_yellow" rgba="1.00 0.72 0.04 1"/>
+    <material name="target_mat" rgba="1.00 0.55 0.12 0"/>
   </asset>
 
   <worldbody>
@@ -65,6 +66,11 @@
       <geom name="yellow_cylinder_geom" type="cylinder" size="0.020 0.026"
             material="rs_yellow" mass="0.042" friction="3.5 0.08 0.01"
             solref="0.002 1" solimp="0.99 0.995 0.0005"/>
+    </body>
+
+    <body name="ik_target" mocap="true" pos="0.34 0 0.20">
+      <geom name="ik_target_sphere" type="sphere" size="0.025" material="target_mat" contype="0" conaffinity="0"/>
+      <site name="ik_target_site" pos="0 0 0" size="0.035" rgba="1 0.55 0.12 0"/>
     </body>
   </worldbody>
 </mujoco>

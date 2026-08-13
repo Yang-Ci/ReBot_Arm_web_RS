@@ -54,6 +54,7 @@
     armStatus: `/${NS}/arm_status`,
     gripper: `/${NS}/gripper/state`,
     cameraImage: `/${NS}/mujoco/overhead_rgb/image_raw`,
+    objectStates: `/${NS}/mujoco/object_states`,
     visionDetections: `/${NS}/vision/color_blocks/detections`,
     simAnimation: `/${NS}/sim/animation_event`
   };
@@ -187,9 +188,14 @@
   let lastTargetPoseSent = 0;
   let latestVisionPayload = null;
   let latestVisionAt = 0;
+  let latestMujocoSimulationMode = '';
   let selectedVisionTarget = null;
   let lastVisionTarget = null;
+  let heldVisionTarget = null;
+  let autoVisionTargetColor = '';
   let visionSequenceBusy = false;
+  let activeVisionOperation = '';
+  let queuedVisionOperation = null;
   let safeDisconnectBusy = false;
   let gravityCompensationActive = false;
   let gravityStatusSource = 'initial';
@@ -227,6 +233,7 @@
   client.subscribe(REQUIRED_TOPICS.cameraImage, 'sensor_msgs/msg/Image', handleCameraImage, { throttleRate: 120 });
   client.subscribe(REQUIRED_TOPICS.visionDetections, 'std_msgs/msg/String', handleVisionDetections, { throttleRate: 180 });
   client.subscribe(REQUIRED_TOPICS.simAnimation, 'std_msgs/msg/String', handleSimAnimationEvent, { throttleRate: 0 });
+  client.subscribe(REQUIRED_TOPICS.objectStates, 'std_msgs/msg/String', handleMujocoObjectStates, { throttleRate: 33 });
   if (els.cameraTopic) els.cameraTopic.textContent = REQUIRED_TOPICS.cameraImage;
 
   client.addEventListener('status', (event) => {
@@ -309,11 +316,14 @@
     collapseBtn.textContent = collapsed ? '▶' : '◀';
     collapseBtn.title = collapsed ? t('panel.expand') : t('panel.collapse');
  });
- if (els.visionColor) els.visionColor.addEventListener('change', updateSelectedVisionTarget);
+ if (els.visionColor) els.visionColor.addEventListener('change', () => {
+    if (els.visionColor.value === 'auto') autoVisionTargetColor = '';
+    updateSelectedVisionTarget();
+  });
   if (els.visionFillPose) els.visionFillPose.addEventListener('click', fillPoseFromVisionTarget);
   if (els.visionMoveAbove) els.visionMoveAbove.addEventListener('click', moveAboveVisionTarget);
-  if (els.visionPickDemo) els.visionPickDemo.addEventListener('click', runVisionPickDemo);
-  if (els.visionPlaceDemo) els.visionPlaceDemo.addEventListener('click', runVisionPlaceDemo);
+  if (els.visionPickDemo) els.visionPickDemo.addEventListener('click', requestVisionPick);
+  if (els.visionPlaceDemo) els.visionPlaceDemo.addEventListener('click', requestVisionPlace);
   if (els.stopPath) {
     els.stopPath.addEventListener('click', () => {
       cancelLowLevelPlayback();
@@ -423,6 +433,12 @@
       const width = mujocoFingerToWidth(fingerPosition);
       latestGripperPosition = width;
       latestGripperAt = latestMujocoStateAt;
+      const fingerVelocity = Array.isArray(msg.velocity)
+        ? Number(msg.velocity[gripperIndex])
+        : NaN;
+      latestGripperVelocity = Number.isFinite(fingerVelocity)
+        ? Math.abs(fingerVelocity) * OPEN_GRIPPER_M / GRIPPER_FINGER_TRAVEL_M
+        : null;
       if (els.mirror.checked) {
         const holdUntil = mirrorHoldUntil.get('gripper') || 0;
         const target = simTargetAngles.get('gripper');
@@ -1396,6 +1412,7 @@
     if (
       !client.connected ||
       !gravityCompensationActive ||
+      visionSequenceBusy ||
       gravityStatusPollInFlight
     ) return;
 
@@ -1514,6 +1531,9 @@
 
   function syncSimArmFromTrajectoryPoint(point) {
     if (!window.reBotSim || typeof window.reBotSim.setAngles !== 'function') return;
+    // While MuJoCo feedback is fresh in simulation, let that feedback drive
+    // the web arm; writing every playback waypoint on top of it causes jitter.
+    if (TARGET_KEY === 'simulation' && els.mirror.checked && mujocoStateIsFresh()) return;
     const angles = {};
     JOINT_NAMES.forEach((name, index) => {
       const pos = Number(point.positions[index]);
@@ -1829,11 +1849,29 @@
 
     latestVisionPayload = payload;
     latestVisionAt = performance.now();
-    const count = Number(payload.count) || 0;
-    if (els.visionStatus) {
-      els.visionStatus.textContent = count ? `${count} 个 / 目标 ${payload.target_color || '--'}` : t('st.visionNone');
-    }
     updateSelectedVisionTarget();
+    const count = Number(payload.count) || 0;
+    const displayedColor = selectedVisionTarget && selectedVisionTarget.color
+      ? selectedVisionTarget.color
+      : payload.target_color;
+    if (els.visionStatus) {
+      els.visionStatus.textContent = count
+        ? t('fb.visionCount', { count, color: displayedColor || '--' })
+        : t('st.visionNone');
+    }
+  }
+
+  function handleMujocoObjectStates(msg) {
+    let payload = null;
+    try {
+      payload = JSON.parse(msg && msg.data ? msg.data : '{}');
+    } catch (error) {
+      return;
+    }
+    latestMujocoSimulationMode = String(payload.simulation_mode || '').toLowerCase();
+    if (window.reBotSim && typeof window.reBotSim.syncMujocoObjectStates === 'function') {
+      window.reBotSim.syncMujocoObjectStates(payload.objects || []);
+    }
   }
 
   function handleSimAnimationEvent(msg) {
@@ -1857,8 +1895,15 @@
   }
 
   function updateSelectedVisionTarget() {
-    const target = chooseVisionTarget();
+    const mode = els.visionColor ? String(els.visionColor.value || 'auto') : 'auto';
+    const target = mode === 'auto'
+      ? (chooseVisionTarget(autoVisionTargetColor) || chooseRandomVisionTarget())
+      : chooseVisionTarget(mode);
     selectedVisionTarget = target;
+    renderVisionTarget(target);
+  }
+
+  function renderVisionTarget(target) {
     if (!els.visionTarget) return;
     if (!target) {
       els.visionTarget.textContent = '--';
@@ -1867,6 +1912,22 @@
     const approachZ = getVisionApproachZ(target);
     const graspPlan = estimateVisionGraspPlan(target);
     els.visionTarget.textContent = t('fb.visionTarget', { color: target.color, x: Number(target.x).toFixed(3), y: Number(target.y).toFixed(3), z: approachZ.toFixed(3), mm: Math.round(graspPlan.physicalGap * 1000), yaw: Math.round(graspPlan.yawRad * 180 / Math.PI) });
+  }
+
+  function chooseRandomVisionTarget() {
+    const detections = latestVisionPayload && Array.isArray(latestVisionPayload.detections)
+      ? latestVisionPayload.detections
+      : [];
+    const colors = [...new Set(
+      detections
+        .filter((item) => item && item.color)
+        .map((item) => String(item.color))
+    )];
+    if (!colors.length) return null;
+    const alternatives = colors.filter((color) => color !== autoVisionTargetColor);
+    const pool = alternatives.length ? alternatives : colors;
+    autoVisionTargetColor = pool[Math.floor(Math.random() * pool.length)];
+    return chooseVisionTarget(autoVisionTargetColor);
   }
 
   function chooseVisionTarget(preferredColor) {
@@ -1906,14 +1967,22 @@
 
   async function moveAboveVisionTarget() {
     if (!controlAllowed(true)) return;
-    const target = selectedVisionTarget || chooseVisionTarget();
+    const mode = els.visionColor ? String(els.visionColor.value || 'auto') : 'auto';
+    const target = mode === 'auto'
+      ? (chooseRandomVisionTarget() || selectedVisionTarget || chooseVisionTarget())
+      : (selectedVisionTarget || chooseVisionTarget(mode));
     const pose = poseFromVisionTarget(getVisionApproachZ(target), target);
     if (!pose) return;
+    if (mode === 'auto') {
+      selectedVisionTarget = target;
+      renderVisionTarget(target);
+      writeLog(`自动模式已选择目标：${target.color}`, 'info');
+    }
     const previousTarget = lastVisionTarget && !sameVisionTarget(lastVisionTarget, target)
       ? lastVisionTarget
       : null;
     const duration = getPoseDuration();
-    setVisionBusy(true);
+    setVisionBusy(true, 'move');
     try {
       const route = buildVisionTransitRoute(previousTarget, target);
       for (const waypoint of route) {
@@ -1926,17 +1995,95 @@
       setMessage(message);
       writeLog(message, 'warn');
     } finally {
-      setVisionBusy(false);
+      finishVisionSequence();
     }
   }
 
-  async function runVisionPickDemo() {
-    if (visionSequenceBusy) return;
+  function requestedVisionPickColor() {
+    const mode = els.visionColor ? String(els.visionColor.value || 'auto') : 'auto';
+    if (mode !== 'auto') return mode;
+    const target = chooseRandomVisionTarget() || selectedVisionTarget || chooseVisionTarget();
+    if (!target) return 'auto';
+    selectedVisionTarget = target;
+    renderVisionTarget(target);
+    return String(target.color || 'auto');
+  }
+
+  function queueVisionOperation(operation) {
+    queuedVisionOperation = operation;
+    const color = operation.type === 'pick' && operation.color && operation.color !== 'auto'
+      ? ` ${operation.color}`
+      : '';
+    const nextLabel = operation.type === 'pick' ? `抓取${color}` : '放置';
+    const currentLabel = activeVisionOperation === 'place' ? '放置' : (activeVisionOperation === 'move' ? '移动' : '抓取');
+    const message = `当前正在${currentLabel}，已排队下一步：${nextLabel}`;
+    setMessage(message);
+    writeLog(message, 'info');
+    const activeButton = activeVisionOperation === 'place' ? els.visionPlaceDemo : els.visionPickDemo;
+    if (activeButton) {
+      activeButton.textContent = `${currentLabel}中 · 已排队${nextLabel}`;
+      activeButton.title = message;
+    }
+  }
+
+  function requestVisionPick() {
+    const color = requestedVisionPickColor();
+    if (visionSequenceBusy) {
+      queueVisionOperation({ type: 'pick', color });
+      return;
+    }
+    runVisionPickDemo(color);
+  }
+
+  function requestVisionPlace() {
+    if (visionSequenceBusy) {
+      queueVisionOperation({ type: 'place' });
+      return;
+    }
+    runVisionPlaceDemo();
+  }
+
+  function runQueuedVisionOperation() {
+    if (visionSequenceBusy || !queuedVisionOperation) return;
+    const operation = queuedVisionOperation;
+    queuedVisionOperation = null;
+    if (operation.type === 'pick') {
+      runVisionPickDemo(operation.color);
+    } else {
+      runVisionPlaceDemo();
+    }
+  }
+
+  async function runVisionPickDemo(requestedColor) {
+    if (visionSequenceBusy) {
+      queueVisionOperation({ type: 'pick', color: requestedColor || requestedVisionPickColor() });
+      return;
+    }
     if (!controlAllowed(true)) return;
-    const preferredColor = els.visionColor ? String(els.visionColor.value || 'auto') : 'auto';
+    // Claim the sequence before the first await. Previously the 700 ms vision
+    // wait left the button active, so repeated clicks launched concurrent IK
+    // service calls that all fought over the arm and timed out together.
+    setVisionBusy(true, 'pick');
+    if (TARGET_KEY === 'simulation' && latestMujocoSimulationMode === 'kinematic') {
+      const message = '当前 MuJoCo 为 kinematic 模式，物体没有接触动力学，无法执行物理抓取；请使用 physics 模式重启仿真。';
+      setMessage(message);
+      writeLog(message, 'warn');
+      finishVisionSequence();
+      return;
+    }
+    const preferredColor = requestedColor || (els.visionColor ? String(els.visionColor.value || 'auto') : 'auto');
     let target = await waitForFreshVisionTarget(preferredColor, 700);
+    if (preferredColor === 'auto') {
+      target = chooseRandomVisionTarget() || target;
+      if (target) {
+        selectedVisionTarget = target;
+        renderVisionTarget(target);
+        writeLog(`自动模式已选择目标：${target.color}`, 'info');
+      }
+    }
     if (!target) {
       setMessage(t('msg.noVisionTarget'));
+      finishVisionSequence();
       return;
     }
 
@@ -1944,7 +2091,10 @@
       ? lastVisionTarget
       : null;
     let plan = buildVisionPickPlan(target);
-    if (!plan) return;
+    if (!plan) {
+      finishVisionSequence();
+      return;
+    }
     writeLog(
       t('log.visionGraspPose', { color: target.color, mm: Math.round(plan.graspPlan.physicalGap * 1000), yaw: Math.round(plan.graspPlan.yawRad * 180 / Math.PI), lift: plan.firstLiftPose.position.z.toFixed(3), transit: plan.transitPose.position.z.toFixed(3) }),
       'info'
@@ -1962,24 +2112,68 @@
       return result;
     };
 
-    setVisionBusy(true);
     try {
-      releaseSimCarriedObject();
-      const preGraspWidth = Math.min(
-        OPEN_GRIPPER_M,
-        physicalGapToGripperCommand(plan.graspPlan.physicalGap + 0.012)
-      );
-      await commandGripperAndWait(preGraspWidth, `视觉抓取：夹爪预张开 ${Math.round(preGraspWidth * 1000)} 毫米`, {
-        timeoutMs: 2600,
-        minWaitMs: 850,
-        tolerance: 0.006,
-        requireReached: false,
-        afterMs: 180
-      });
+      const carriedColor = window.reBotSim && typeof window.reBotSim.getCarriedObject === 'function'
+        ? window.reBotSim.getCarriedObject()
+        : '';
+      const carriedTarget = heldVisionTarget
+        || (carriedColor && lastVisionTarget && String(lastVisionTarget.color) === String(carriedColor)
+          ? lastVisionTarget
+          : null);
+      if (carriedTarget && sameVisionTarget(carriedTarget, target)) {
+        const message = `当前已经夹持 ${target.color}，如需放下请点击“放置物体”`;
+        setMessage(message);
+        writeLog(message, 'info');
+        return;
+      }
+      const openGripper = async () => {
+        const settings = {
+          timeoutMs: 4500,
+          minWaitMs: 850,
+          tolerance: 0.0035,
+          requireReached: true,
+          afterMs: 180
+        };
+        try {
+          await commandGripperAndWait(OPEN_GRIPPER_M, t('msg.pickOpenGripper'), settings);
+        } catch (error) {
+          const measured = readGripperFeedbackPosition(NaN);
+          if (Number.isFinite(measured) && Math.abs(measured - OPEN_GRIPPER_M) <= 0.005) {
+            writeLog('视觉抓取：夹爪实际已打开，忽略丢失的到位反馈并继续', 'warn');
+            return;
+          }
+          writeLog('视觉抓取：夹爪未打开，当前序列自动重试一次', 'warn');
+          await commandGripperAndWait(OPEN_GRIPPER_M, t('msg.pickOpenGripper'), {
+            ...settings,
+            timeoutMs: 3000,
+            minWaitMs: 500
+          });
+        }
+      };
 
-      const route = buildVisionTransitRoute(previousTarget, target);
-      for (const waypoint of route) {
-        await runIfNeeded(waypoint.pose, Math.max(1.2, duration * 0.65), waypoint.label);
+      const routeStartTarget = carriedTarget && !sameVisionTarget(carriedTarget, target)
+        ? carriedTarget
+        : previousTarget;
+      const route = buildVisionTransitRoute(routeStartTarget, target);
+      const moveHighRoute = async () => {
+        for (const waypoint of route) {
+          await runIfNeeded(waypoint.pose, Math.max(1.2, duration * 0.65), waypoint.label);
+        }
+      };
+
+      if (carriedTarget) {
+        // Match the DM hand-off flow: release the previous object at the
+        // current safe height, then travel directly to the next target. The
+        // explicit Place button remains responsible for descend-and-place.
+        writeLog(`准备抓取 ${target.color}：先在当前位置释放 ${carriedTarget.color}，再直接切换目标`, 'info');
+        await openGripper();
+        releaseSimCarriedObject();
+        await moveHighRoute();
+      } else {
+        // On a normal pick, start opening and moving to the safe high waypoint
+        // together. Both must complete before any descent toward the object.
+        writeLog('视觉抓取：夹爪打开与高位关节运动并行开始', 'info');
+        await Promise.all([openGripper(), moveHighRoute()]);
       }
 
       const refinedTarget = await waitForFreshVisionTarget(target.color, 420);
@@ -2007,12 +2201,21 @@
       await runIfNeeded(plan.graspPose, descendDuration, t('msg.pickDescend', { color: target.color }));
 
       await commandGripperAndWait(plan.graspPlan.command, t('msg.pickSqueeze', { color: target.color }), {
-        timeoutMs: 2100,
+        timeoutMs: 4500,
         minWaitMs: 850,
         tolerance: 0.006,
         allowContactStop: true,
+        requireContactStop: TARGET_KEY === 'simulation',
+        contactTolerance: 0.0025,
+        requireSettled: true,
+        settleMs: 420,
+        // Contact introduces sub-millimetre MuJoCo oscillation even though the
+        // object is already firmly pinched. 1.5 mm is still well below the
+        // per-sample travel while the 5 rad/s gripper is actually closing.
+        positionStableTolerance: 0.0015,
         afterMs: 220
       });
+      writeLog(`夹爪已稳定夹紧 ${target.color}，开始离桌抬升`, 'ok');
       const firstLiftDuration = Math.max(1.25, duration * 0.75);
       if (String(target.color || '') === 'blue') {
         await runVisionMoveStep(plan.firstLiftPose, firstLiftDuration, t('msg.pickBlueLift', { z: plan.firstLiftPose.position.z.toFixed(3) }));
@@ -2048,20 +2251,55 @@
      setMessage(message);
      writeLog(message, 'warn');
    } finally {
-     setVisionBusy(false);
+     finishVisionSequence();
    }
  }
 
+  async function safelyPlaceVisionTarget(target, duration, reason) {
+    const plan = buildVisionPickPlan(target);
+    if (!plan) throw new Error(`${reason || '视觉放置'}：目标位姿无效`);
+    await runVisionMoveStep(
+      plan.approachPose,
+      Math.max(1.1, duration * 0.65),
+      `${reason || '视觉放置'}：移动到 ${target.color} 上方`
+    );
+    await runVisionMoveStep(
+      plan.graspPose,
+      Math.max(1.1, duration * 0.65),
+      `${reason || '视觉放置'}：下探 ${target.color}`
+    );
+    await commandGripperAndWait(OPEN_GRIPPER_M, `${reason || '视觉放置'}：松开 ${target.color}`, {
+      timeoutMs: 4500,
+      minWaitMs: 850,
+      tolerance: 0.006,
+      requireReached: true,
+      requireSettled: true,
+      settleMs: 320,
+      afterMs: 220
+    });
+    releaseSimCarriedObject();
+    await runVisionMoveStep(
+      plan.approachPose,
+      Math.max(1.5, duration * 0.8),
+      `${reason || '视觉放置'}：抬高 ${target.color}`
+    );
+    lastVisionTarget = cloneVisionTarget(target);
+  }
+
   async function runVisionPlaceDemo() {
-    if (visionSequenceBusy) return;
+    if (visionSequenceBusy) {
+      queueVisionOperation({ type: 'place' });
+      return;
+    }
     if (!controlAllowed(true)) return;
 
     const simCarriedColor = window.reBotSim && typeof window.reBotSim.getCarriedObject === 'function'
       ? window.reBotSim.getCarriedObject()
       : '';
-    const target = simCarriedColor && lastVisionTarget && String(lastVisionTarget.color) === String(simCarriedColor)
-      ? lastVisionTarget
-      : null;
+    const target = heldVisionTarget
+      || (simCarriedColor && lastVisionTarget && String(lastVisionTarget.color) === String(simCarriedColor)
+        ? lastVisionTarget
+        : null);
     if (!target) {
       setMessage(t('msg.noCarriedObject'));
       writeLog('放置被忽略：没有已抓取的物体', 'warn');
@@ -2071,32 +2309,9 @@
     const plan = buildVisionPickPlan(target);
     if (!plan) return;
     const duration = getPoseDuration();
-    setVisionBusy(true);
+    setVisionBusy(true, 'place');
     try {
-      await runVisionMoveStep(
-        plan.approachPose,
-        Math.max(1.1, duration * 0.65),
-        `视觉放置：移动到 ${target.color} 上方`
-      );
-      await runVisionMoveStep(
-        plan.graspPose,
-        Math.max(1.1, duration * 0.65),
-        `视觉放置：下探 ${target.color}`
-      );
-      await commandGripperAndWait(OPEN_GRIPPER_M, `视觉放置：松开 ${target.color}`, {
-        timeoutMs: 2600,
-        minWaitMs: 850,
-        tolerance: 0.006,
-        requireReached: false,
-        afterMs: 220
-      });
-      releaseSimCarriedObject();
-      await runVisionMoveStep(
-        plan.approachPose,
-        Math.max(1.5, duration * 0.8),
-        `视觉放置：抬高 ${target.color}`
-      );
-      lastVisionTarget = cloneVisionTarget(target);
+      await safelyPlaceVisionTarget(target, duration, '视觉放置');
       setMessage(`视觉放置演示完成，${target.color} 物体已放下`);
       writeLog(`视觉放置演示完成，${target.color} 物体已放下`, 'ok');
     } catch (error) {
@@ -2104,7 +2319,7 @@
       setMessage(message);
       writeLog(message, 'warn');
     } finally {
-      setVisionBusy(false);
+      finishVisionSequence();
     }
   }
 
@@ -2118,7 +2333,53 @@
     if (!(result && (result.localPlayback || result.completed))) {
       await sleep(duration * 1000 + 300);
     }
+    await waitForArmMotionSettled(label, result && result.jointGoal);
     return result;
+  }
+
+  async function waitForArmMotionSettled(label, jointGoal) {
+    if (TARGET_KEY !== 'simulation' || !mujocoStateIsFresh()) return;
+    const timeoutMs = 2600;
+    const started = performance.now();
+    let previousStamp = latestJointStateAt;
+    let previous = getCurrentRosPositions();
+    let stableSince = 0;
+    let sawFreshFeedback = false;
+
+    while (performance.now() - started < timeoutMs) {
+      await sleep(80);
+      if (latestJointStateAt === previousStamp) continue;
+      previousStamp = latestJointStateAt;
+      sawFreshFeedback = true;
+      const current = getCurrentRosPositions();
+      const sampleDelta = current.reduce((largest, value, index) => (
+        Math.max(largest, Math.abs(value - previous[index]))
+      ), 0);
+      const goalError = Array.isArray(jointGoal) && jointGoal.length === current.length
+        ? current.reduce((largest, value, index) => (
+          Math.max(largest, Math.abs(value - Number(jointGoal[index])))
+        ), 0)
+        : 0;
+      const stable = sampleDelta < 0.0012 && goalError < 0.025;
+      if (stable) {
+        if (!stableSince) stableSince = performance.now();
+        if (performance.now() - stableSince >= 260) {
+          writeLog(`${label}：MuJoCo 实际反馈已到位`, 'ok');
+          return;
+        }
+      } else {
+        stableSince = 0;
+      }
+      previous = current;
+    }
+
+    if (sawFreshFeedback) {
+      // The fake driver and MuJoCo physics loop can retain a small steady-state
+      // joint error under gravity. This settling check is a sequencing delay,
+      // not a motion result; the ROS action result above remains authoritative.
+      // Do not abort a valid pick at the safe high waypoint.
+      writeLog(`${label}：MuJoCo 反馈仍有微小跟随误差，继续下一步`, 'warn');
+    }
   }
 
   function movementSucceeded(result) {
@@ -2272,7 +2533,12 @@
     });
     const points = buildSmoothJointMovePoints(start, goal, duration);
     await sendTrajectory(points, t('msg.ikLowLevelSuffix', { label: optimisticMessage }));
-    return { success: true, localPlayback: true, bestEffort: ikBestEffort };
+    return {
+      success: true,
+      localPlayback: true,
+      bestEffort: ikBestEffort,
+      jointGoal: goal
+    };
   }
 
   function buildSmoothJointMovePoints(start, goal, duration) {
@@ -2363,7 +2629,10 @@
     }
     const deltaZ = z1 - z0;
     const xyError = Math.hypot(x1 - x0, y1 - y0);
-    const ok = deltaZ >= 0.035 && xyError <= 0.03;
+    // The commanded first lift is 40 mm at the TCP. A pinched object's centre
+    // can lag by roughly 10 mm while the pads settle, so 20 mm is a clear
+    // lift-off from the table without rejecting a valid physical grasp.
+    const ok = deltaZ >= 0.020 && xyError <= 0.03;
     const message = `抬升 ${(deltaZ * 1000).toFixed(0)}mm，水平偏移 ${(xyError * 1000).toFixed(0)}mm`;
     return { ok, deltaZ, xyError, message };
   }
@@ -2375,13 +2644,16 @@
 
   function attachSimCarriedObject(target) {
     const color = target && target.color ? String(target.color) : '';
-    if (!color || !window.reBotSim || typeof window.reBotSim.attachObject !== 'function') return;
+    if (!color) return;
+    heldVisionTarget = cloneVisionTarget(target);
+    if (!window.reBotSim || typeof window.reBotSim.attachObject !== 'function') return;
     if (window.reBotSim.attachObject(color)) {
       writeLog(`网页动画：${color} 已绑定到夹爪跟随`, 'ok');
     }
   }
 
   function releaseSimCarriedObject() {
+    heldVisionTarget = null;
     if (!window.reBotSim || typeof window.reBotSim.releaseObject !== 'function') return;
     if (window.reBotSim.releaseObject({ settleOnTable: true })) {
       writeLog('网页动画：已释放上一件跟随物体', 'info');
@@ -2457,18 +2729,37 @@
     return clamp(Number(els.poseDuration && els.poseDuration.value) || 2, 0.4, 8);
   }
 
-  function setVisionBusy(busy) {
+  function setVisionBusy(busy, operation) {
     visionSequenceBusy = busy;
+    activeVisionOperation = busy ? String(operation || '') : '';
     if (els.visionPickDemo) {
-      els.visionPickDemo.disabled = busy;
-      els.visionPickDemo.textContent = busy ? t('btn.pickBusy') : t('camera.pick');
+      // Keep the action buttons clickable while a sequence is running. Their
+      // handlers serialize the latest requested action instead of silently
+      // discarding it or starting concurrent ROS service calls.
+      els.visionPickDemo.disabled = false;
+      els.visionPickDemo.setAttribute('aria-busy', busy && operation === 'pick' ? 'true' : 'false');
+      els.visionPickDemo.textContent = busy && operation === 'pick'
+        ? t('btn.pickBusy')
+        : t('camera.pick');
+      if (!busy) els.visionPickDemo.removeAttribute('title');
     }
     if (els.visionPlaceDemo) {
-      els.visionPlaceDemo.disabled = busy;
-      els.visionPlaceDemo.textContent = busy ? t('btn.placeBusy') : t('camera.place');
+      els.visionPlaceDemo.disabled = false;
+      els.visionPlaceDemo.setAttribute('aria-busy', busy && operation === 'place' ? 'true' : 'false');
+      els.visionPlaceDemo.textContent = busy && operation === 'place'
+        ? t('btn.placeBusy')
+        : t('camera.place');
+      if (!busy) els.visionPlaceDemo.removeAttribute('title');
     }
     if (els.visionMoveAbove) els.visionMoveAbove.disabled = busy;
     if (els.visionFillPose) els.visionFillPose.disabled = busy;
+  }
+
+  function finishVisionSequence() {
+    setVisionBusy(false);
+    // Start the queued action synchronously up to its first await so there is
+    // no idle frame in which another click can strand an older queued action.
+    runQueuedVisionOperation();
   }
 
   function updateFeedbackError(feedback) {
@@ -2548,7 +2839,11 @@
       settleMs: 260,
       afterMs: 0,
       allowContactStop: false,
+      requireContactStop: false,
+      contactTolerance: 0.0025,
       requireReached: false,
+      requireSettled: false,
+      positionStableTolerance: 0.0008,
       ...(options || {})
     };
     publishGripper(position);
@@ -2562,6 +2857,8 @@
     let stableSince = start;
     let sawFreshFeedback = false;
     let reached = false;
+    let settled = false;
+    let contactStopped = false;
     let current = lastPosition;
     let source = latestGripperAt > 0 ? 'gripper/state' : '';
 
@@ -2585,28 +2882,70 @@
       sawFreshFeedback = true;
       current = hasFreshJointState ? jointFeedback.widthCommand : Number(latestGripperPosition);
       source = hasFreshJointState ? 'joint_states/gripper_joint1' : 'gripper/state';
-      const velocity = Number(latestGripperVelocity);
+      // Number(null) is zero, which previously made simulation feedback look
+      // stationary before a velocity sample had ever arrived.
+      const velocity = typeof latestGripperVelocity === 'number'
+        ? latestGripperVelocity
+        : NaN;
       const closeEnough = Number.isFinite(current) && Math.abs(current - position) <= settings.tolerance;
-      const barelyMoving = Number.isFinite(velocity)
-        ? Math.abs(velocity) < 0.0025
-        : Number.isFinite(current) && Number.isFinite(lastPosition) && Math.abs(current - lastPosition) < 0.0015;
+      // During a closing command, a measured opening that remains above the
+      // requested opening proves that the fingers were blocked by an object.
+      // Reaching the command exactly is an empty grasp and must not be lifted.
+      const contactBlocked = settings.allowContactStop &&
+        Number.isFinite(current) &&
+        current - position >= settings.contactTolerance;
+      // MuJoCo kinematic mode intentionally publishes qvel=0 while qpos is
+      // being smoothed, so velocity alone cannot prove that the fingers have
+      // stopped. Require consecutive position samples to be stable as well.
+      const positionStable = Number.isFinite(current) &&
+        Number.isFinite(lastPosition) &&
+        Math.abs(current - lastPosition) < settings.positionStableTolerance;
+      const velocityStable = !Number.isFinite(velocity) || Math.abs(velocity) < 0.0025;
+      // Physics contact can leave a tiny non-zero qvel while the fingers are
+      // firmly blocked on the object. In simulation, a stable measured opening
+      // is the reliable contact-stop signal; hardware keeps the velocity check.
+      const barelyMoving = positionStable && (
+        TARGET_KEY === 'simulation' || velocityStable
+      );
       reached = reached || closeEnough;
 
       if (barelyMoving) {
         if (now - stableSince >= settings.settleMs && now - start >= settings.minWaitMs) {
-          if (closeEnough || (!settings.requireReached && settings.allowContactStop)) break;
+          if (closeEnough || (!settings.requireReached && settings.allowContactStop)) {
+            settled = true;
+            contactStopped = contactStopped || contactBlocked;
+            break;
+          }
         }
       } else {
         stableSince = now;
       }
 
-      if (closeEnough && now - start >= settings.minWaitMs) break;
+      if (
+        closeEnough &&
+        now - start >= settings.minWaitMs &&
+        (!settings.requireSettled || (
+          barelyMoving && now - stableSince >= settings.settleMs
+        ))
+      ) break;
       lastPosition = current;
     }
 
     if (settings.afterMs > 0) await sleep(settings.afterMs);
     if (settings.requireReached && !reached) {
-      const message = `${label}未确认到位，已停止本轮抓取，避免夹爪未全开就关闭`;
+      const message = `${label}未确认到位，已停止本轮动作`;
+      setMessage(message);
+      writeLog(message, 'warn');
+      throw new Error(message);
+    }
+    if (settings.requireSettled && !settled) {
+      const message = `${label}未确认稳定停止，已停止本轮动作`;
+      setMessage(message);
+      writeLog(message, 'warn');
+      throw new Error(message);
+    }
+    if (settings.requireContactStop && !contactStopped) {
+      const message = `${label}未检测到物体接触，夹爪为空，已停止抬升`;
       setMessage(message);
       writeLog(message, 'warn');
       throw new Error(message);

@@ -42,7 +42,9 @@ class FakeRsDriver(Node):
         self.declare_parameter("arm_namespace", "rebotarm_rs")
         self.declare_parameter("joint_state_rate", 100.0)
         self.declare_parameter("max_joint_speed", 1.0)
-        self.declare_parameter("max_gripper_speed", 2.0)
+        # Match the RS web/MIT command limit. A full 0 -> 5 rad stroke then
+        # takes about one second instead of the former 2.5 seconds.
+        self.declare_parameter("max_gripper_speed", 5.0)
         self.declare_parameter("gripper_open_position", 5.0)
         self.declare_parameter("start_enabled", True)
 

@@ -1,0 +1,19 @@
+{
+  "_comment": "B601-RS 可达性预校验常数 · 由 Pinocchio FK + Monte-Carlo 生成。运行时由 scripts/b601_workspace_constants.py 重新生成覆盖。",
+  "source_urdf": "third_party/reBotArm_control_py/urdf/00-arm-rs_asm-v3/urdf/00-arm-rs_asm-v3.urdf",
+  "shoulder_xyz": [0.020, 0.0263, 0.145],
+  "L_upper_m": 0.236,
+  "L_max_m": 0.55,
+  "L_min_m": 0.07,
+  "warn_ratio": 0.85,
+  "dz_floor_m": -0.1,
+  "joint_limits_rad": [
+    [-2.8, 2.8],
+    [0.0, 3.14],
+    [0.0, 3.14],
+    [-1.57, 1.57],
+    [-1.57, 1.57],
+    [-3.14, 3.14]
+  ],
+  "samples": 50000
+}

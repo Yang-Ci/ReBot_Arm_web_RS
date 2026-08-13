@@ -10,7 +10,7 @@ const APP_SHELL = [
   '/js/rebot-sim.js?v=20260812-rs-ctrl32',
   '/js/ros/rebot-ros-client.js?v=20260812-rs-ctrl32',
   '/js/control-mode.js?v=20260812-rs-ctrl32',
-  '/js/ros/rebot-ros-ui.js?v=20260812-rs-ctrl32',
+  '/js/ros/rebot-ros-ui.js?v=20260813-rs-flow42',
   '/js/rebot-llm.js?v=20260813-rs-guide43',
   '/lib/three-r128.min.js',
   '/lib/STLLoader-umd.js',

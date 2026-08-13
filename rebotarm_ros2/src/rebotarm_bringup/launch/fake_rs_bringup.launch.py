@@ -27,7 +27,7 @@ def generate_launch_description():
             DeclareLaunchArgument("arm_namespace", default_value="rebotarm_rs"),
             DeclareLaunchArgument("joint_state_rate", default_value="100.0"),
             DeclareLaunchArgument("max_joint_speed", default_value="1.0"),
-            DeclareLaunchArgument("max_gripper_speed", default_value="2.0"),
+            DeclareLaunchArgument("max_gripper_speed", default_value="5.0"),
             DeclareLaunchArgument("start_enabled", default_value="true"),
             DeclareLaunchArgument("use_rviz", default_value="false"),
             Node(

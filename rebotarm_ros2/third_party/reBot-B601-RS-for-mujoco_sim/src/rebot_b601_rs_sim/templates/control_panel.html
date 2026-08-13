@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B601-RS 控制面板</title>
+<style>
+  :root {
+    --bg: #1a1d23;
+    --panel-bg: #23262e;
+    --border: #363a44;
+    --text: #c8ccd4;
+    --accent: #5b9bd5;
+    --green: #4caf50;
+    --warn: #f0a030;
+    --red: #e05555;
+    --log-bg: #14161a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text);
+    display: flex; justify-content: center; padding: 24px 16px;
+    min-height: 100vh;
+  }
+  .panel {
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    width: 100%; max-width: 540px;
+    display: flex; flex-direction: column;
+  }
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .header h1 { font-size: 1.15rem; font-weight: 600; }
+  .status {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 0.8rem; font-weight: 500;
+  }
+  .status .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--warn); transition: background 0.3s;
+  }
+  .status.connected .dot { background: var(--green); }
+  .pose-display {
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    font-size: 0.82rem; color: #8a8f98;
+    margin-bottom: 20px; padding: 8px 12px;
+    background: #1a1d23; border-radius: 6px;
+  }
+  .slider-group { margin-bottom: 14px; }
+  .slider-group .label-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 4px;
+  }
+  .slider-group label {
+    font-size: 0.85rem; font-weight: 500; text-transform: uppercase;
+    letter-spacing: 0.04em; color: #9aa0ab;
+  }
+  .slider-group .val {
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    font-size: 0.82rem; color: var(--accent);
+    min-width: 64px; text-align: right;
+  }
+  input[type="range"] {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 6px; border-radius: 3px;
+    background: #2e323b; outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 18px; height: 18px; border-radius: 50%;
+    background: var(--accent); cursor: pointer; border: none;
+  }
+  /* 可达性预校验配色 */
+  input[type="range"].fail::-webkit-slider-thumb {
+    background: var(--red);
+    box-shadow: 0 0 8px 1px rgba(224,85,85,0.5);
+  }
+  input[type="range"].warn::-webkit-slider-thumb {
+    background: var(--warn);
+    box-shadow: 0 0 8px 1px rgba(240,160,48,0.45);
+  }
+  input[type="range"].ok::-webkit-slider-thumb { background: var(--accent); }
+  .reach-status {
+    font-family: "JetBrains Mono","Consolas",monospace;
+    font-size: 0.72rem; color: #8a8f98;
+    margin: -2px 0 10px; padding: 6px 10px;
+    background: #1a1d23; border-radius: 4px;
+    display: flex; justify-content: space-between; align-items: center;
+    border-left: 3px solid var(--accent);
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .reach-status.warn { border-left-color: var(--warn); color: var(--warn); }
+  .reach-status.fail { border-left-color: var(--red);   color: var(--red); }
+  .reach-status .reach-msg { font-weight: 500; }
+  .reach-status .reach-r   { opacity: 0.75; }
+  .section-label {
+    font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.06em; color: #636873;
+    margin: 18px 0 6px; padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  .button-row {
+    display: flex; gap: 10px; margin-top: 20px;
+  }
+  button {
+    flex: 1; padding: 10px 0; border: none; border-radius: 6px;
+    font-size: 0.9rem; font-weight: 600; cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  button:active { opacity: 0.8; }
+  .btn-send { background: var(--accent); color: #fff; }
+  .btn-home { background: #3a3d47; color: var(--text); }
+  .toggle-row {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 14px; font-size: 0.8rem; color: #8a8f98;
+  }
+  .toggle-row input { accent-color: var(--accent); }
+  .ik-feedback {
+    margin-top: 12px; font-size: 0.78rem; color: #6a6f78;
+    min-height: 20px;
+  }
+  .ik-feedback.ok { color: var(--green); }
+  .ik-feedback.fail { color: var(--red); }
+
+  /* ---- 单行日志 ---- */
+  .log-line {
+    margin-top: 12px; padding: 7px 12px;
+    background: var(--log-bg);
+    border: 1px solid var(--border); border-radius: 6px;
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    font-size: 0.76rem; line-height: 1.4;
+    color: #8899aa; white-space: pre-wrap; word-break: break-all;
+    min-height: 32px;
+  }
+  .log-line .ts { color: #4a5568; margin-right: 8px; font-size: 0.7rem; }
+  .log-line.tag-ok { color: var(--green); border-color: rgba(76,175,80,0.3); }
+  .log-line.tag-warn { color: var(--warn); border-color: rgba(240,160,48,0.3); }
+  .log-line.tag-err { color: var(--red); border-color: rgba(224,85,85,0.3); }
+  .log-line.tag-home { color: #8899cc; }
+
+  /* ---- 快捷键 ---- */
+  .kbd {
+    display: inline-block;
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    font-size: 0.7rem;
+    background: #2a2d36;
+    border: 1px solid #444;
+    border-radius: 3px;
+    padding: 1px 5px;
+    margin: 0 2px;
+    color: #999;
+    vertical-align: middle;
+  }
+  .slider-group.highlight { background: rgba(91,155,213,0.06); border-radius: 4px; }
+  .slider-group.highlight input[type="range"]::-webkit-slider-thumb {
+    box-shadow: 0 0 10px 2px var(--accent);
+  }
+  .help-text {
+    margin-top: 14px; font-size: 0.72rem; color: #555; line-height: 1.7;
+    border-top: 1px solid var(--border); padding-top: 10px;
+  }
+
+  /* ---- 摇杆 ---- */
+  .joystick-row {
+    display: flex; align-items: center; gap: 14px;
+    margin-bottom: 16px;
+  }
+  .joystick-pad {
+    width: 130px; height: 130px; flex-shrink: 0;
+    border-radius: 50%;
+    background: radial-gradient(circle at center, #1e2128 0%, #14161a 100%);
+    border: 2px solid #363a44;
+    position: relative; cursor: grab;
+    touch-action: none;
+  }
+  .joystick-pad:active, .joystick-pad.active { cursor: grabbing; }
+  .joystick-crosshair {
+    position: absolute; top: 50%; left: 50%;
+    width: 70%; height: 70%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+  .joystick-crosshair::before, .joystick-crosshair::after {
+    content: ''; position: absolute;
+    background: #2a2d36;
+  }
+  .joystick-crosshair::before {
+    top: 50%; left: 0; right: 0; height: 1px; transform: translateY(-50%);
+  }
+  .joystick-crosshair::after {
+    left: 50%; top: 0; bottom: 0; width: 1px; transform: translateX(-50%);
+  }
+  .joystick-knob {
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #7ab8e8, #3a6fa0);
+    border: 2px solid #5b9bd5;
+    position: absolute;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    transition: box-shadow 0.12s;
+  }
+  .joystick-pad.active .joystick-knob {
+    box-shadow: 0 0 16px 5px rgba(91,155,213,0.45);
+  }
+  .joystick-axis-label {
+    position: absolute; font-size: 0.6rem; color: #4a4f5a;
+    pointer-events: none;
+  }
+  .joystick-axis-label.x { bottom: 6px; left: 50%; transform: translateX(-50%); }
+  .joystick-axis-label.y { right: 6px; top: 50%; transform: translateY(-50%); }
+  .joystick-pos {
+    font-size: 0.65rem; color: #636873; text-align: center;
+    margin-top: 4px; font-family: "JetBrains Mono", "Consolas", monospace;
+  }
+  /* Z 按钮 */
+  .z-controls {
+    display: flex; flex-direction: column; gap: 6px; align-items: center;
+  }
+  .z-btn {
+    width: 46px; height: 42px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: #23262e; color: var(--text);
+    cursor: pointer; font-size: 1.3rem; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    user-select: none; transition: background 0.12s;
+  }
+  .z-btn:hover { background: #363a44; }
+  .z-btn:active { background: var(--accent); color: #fff; }
+  .z-label {
+    font-size: 0.68rem; color: #636873; font-weight: 500;
+  }
+
+</style>
+</head>
+<body>
+<div class="panel">
+  <div class="header">
+    <h1>B601-RS 控制</h1>
+    <div class="status" id="status">
+      <span class="dot"></span> <span id="status-text">连接中…</span>
+    </div>
+  </div>
+  <div class="pose-display" id="pose-display">末端: --</div>
+
+    <div class="log-line" id="log-line"></div>
+
+  <div class="section-label">位置 (m)</div>
+
+  <!-- 摇杆 + Z 按钮 -->
+  <div class="joystick-row">
+    <div>
+      <div class="joystick-pad" id="joystick-pad">
+        <div class="joystick-crosshair"></div>
+        <div class="joystick-knob" id="joystick-knob"></div>
+        <span class="joystick-axis-label x">X</span>
+        <span class="joystick-axis-label y">Y</span>
+      </div>
+      <div class="joystick-pos" id="joystick-pos">X=0.300 Y=0.000</div>
+    </div>
+    <div class="z-controls">
+      <button class="z-btn" id="z-up" title="Z+">▲</button>
+      <span class="z-label">Z</span>
+      <button class="z-btn" id="z-down" title="Z-">▼</button>
+    </div>
+  </div>
+
+  <div class="section-label">速度倍率</div>
+  <div class="slider-group">
+    <div class="label-row"><label>Scale</label><span class="val" id="val-speed-scale">1.00 x</span></div>
+    <input type="range" id="speed-scale" min="0.1" max="5.0" step="0.1" value="1.0">
+  </div>
+
+  <div class="section-label">夹爪</div>
+  <div class="slider-group">
+    <div class="label-row"><label>Open</label><span class="val" id="val-gripper">0°</span></div>
+    <input type="range" id="gripper" min="0" max="345" step="1" value="0">
+  </div>
+
+  <div class="slider-group">
+    <div class="label-row"><label>X <span class="kbd">Q</span><span class="kbd">A</span></label><span class="val" id="val-x">0.300</span></div>
+    <input type="range" id="x" min="-0.20" max="0.60" step="0.001" value="0.300">
+  </div>
+  <div class="slider-group">
+    <div class="label-row"><label>Y <span class="kbd">W</span><span class="kbd">S</span></label><span class="val" id="val-y">0.000</span></div>
+    <input type="range" id="y" min="-0.40" max="0.40" step="0.001" value="0.000">
+  </div>
+  <div class="slider-group">
+    <div class="label-row"><label>Z <span class="kbd">E</span><span class="kbd">D</span></label><span class="val" id="val-z">0.200</span></div>
+    <input type="range" id="z" min="-0.05" max="0.55" step="0.001" value="0.200">
+  </div>
+
+  <div class="reach-status ok" id="reach-status" title="基于 Pinocchio FK 算得的几何常量">
+    <span class="reach-msg" id="reach-msg">可达性 · 已加载</span>
+    <span class="reach-r" id="reach-r">r=-</span>
+  </div>
+
+  <div class="section-label">姿态 (rad)</div>
+  <div class="slider-group">
+    <div class="label-row"><label>Roll <span class="kbd">R</span><span class="kbd">F</span></label><span class="val" id="val-roll">0.00</span></div>
+    <input type="range" id="roll" min="-3.14" max="3.14" step="0.01" value="0.00">
+  </div>
+  <div class="slider-group">
+    <div class="label-row"><label>Pitch <span class="kbd">T</span><span class="kbd">G</span></label><span class="val" id="val-pitch">0.00</span></div>
+    <input type="range" id="pitch" min="-3.14" max="3.14" step="0.01" value="0.00">
+  </div>
+  <div class="slider-group">
+    <div class="label-row"><label>Yaw <span class="kbd">Y</span><span class="kbd">H</span></label><span class="val" id="val-yaw">0.00</span></div>
+    <input type="range" id="yaw" min="-3.14" max="3.14" step="0.01" value="0.00">
+  </div>
+
+    <div class="help-text">
+    键盘快捷键调整目标值（拖条高亮），松开后自动发送：
+    <br><b>X</b> <span class="kbd">Q</span>/<span class="kbd">A</span> &nbsp;
+    <b>Y</b> <span class="kbd">W</span>/<span class="kbd">S</span> &nbsp;
+    <b>Z</b> <span class="kbd">E</span>/<span class="kbd">D</span> &nbsp;
+    <b>Roll</b> <span class="kbd">R</span>/<span class="kbd">F</span> &nbsp;
+    <b>Pitch</b> <span class="kbd">T</span>/<span class="kbd">G</span> &nbsp;
+    <b>Yaw</b> <span class="kbd">Y</span>/<span class="kbd">H</span>
+  </div>
+
+  <div class="toggle-row">
+    <input type="checkbox" id="auto-send" checked>
+    <label for="auto-send">拖条时自动发送</label>
+  </div>
+
+  <div class="button-row">
+    <button class="btn-send" id="btn-send">发送目标</button>
+    <button class="btn-home" id="btn-home">归零</button>
+  </div>
+
+  <div class="ik-feedback" id="ik-feedback"></div>
+
+</div>
+
+<script>
+  const SLIDERS = ["x","y","z","roll","pitch","yaw"];
+  const WS_URL = `ws://${location.host}/ws`;
+  let ws = null;
+  let reconnectTimer = null;
+
+  function setStatus(connected) {
+    const el = document.getElementById("status");
+    const text = document.getElementById("status-text");
+    el.classList.toggle("connected", connected);
+    text.textContent = connected ? "已连接" : "连接中…";
+  }
+
+  function connect() {
+    if (ws && ws.readyState === WebSocket.OPEN) return;
+    ws = new WebSocket(WS_URL);
+    ws.onopen = () => {
+      setStatus(true);
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    };
+    ws.onclose = () => {
+      setStatus(false);
+      reconnectTimer = setTimeout(connect, 2000);
+    };
+    ws.onmessage = (evt) => {
+      try {
+        const msg = JSON.parse(evt.data);
+        if (msg.type === "feedback") {
+          const fb = document.getElementById("ik-feedback");
+          fb.textContent = msg.text || "";
+          fb.className = "ik-feedback " + (msg.ok ? "ok" : "fail");
+        } else if (msg.type === "pose") {
+          document.getElementById("pose-display").textContent =
+            "末端: pos=[" + msg.pos.join(" ") + "] rpy=[" + msg.rpy.join(" ") + "]";
+          // 同步滑块显示
+          _serverSync = true;
+          if (msg.pos) {
+            document.getElementById("x").value = parseFloat(msg.pos[0]);
+            document.getElementById("y").value = parseFloat(msg.pos[1]);
+            document.getElementById("z").value = parseFloat(msg.pos[2]);
+            updateVal("x"); updateVal("y"); updateVal("z");
+          }
+          if (msg.rpy) {
+            document.getElementById("roll").value = parseFloat(msg.rpy[0]);
+            document.getElementById("pitch").value = parseFloat(msg.rpy[1]);
+            document.getElementById("yaw").value = parseFloat(msg.rpy[2]);
+            updateVal("roll"); updateVal("pitch"); updateVal("yaw");
+          }
+          _serverSync = false;
+        } else if (msg.type === "log") {
+          appendLog(msg.text, msg.tag || "");
+        }
+      } catch(e) {}
+    };
+  }
+
+  // ── 日志 (仅保留最新一条) ──
+  function appendLog(text, tag) {
+    const el = document.getElementById("log-line");
+    const now = new Date();
+    const ts = now.toTimeString().slice(0,8);
+    el.className = "log-line" + (tag ? " tag-" + tag : "");
+    el.innerHTML = `<span class="ts">${ts}</span>${text}`;
+  }
+
+  // ── 控制 ──
+  let _lastSend = 0;
+  const THROTTLE_MS = 50;
+
+  function sendTarget(force) {
+    const now = Date.now();
+    if (!force && now - _lastSend < THROTTLE_MS) return;
+    _lastSend = now;
+    const vals = {};
+    SLIDERS.forEach(id => { vals[id] = parseFloat(document.getElementById(id).value); });
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "target", values: vals }));
+    }
+  }
+
+  function sendHome() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "home" }));
+    }
+    SLIDERS.forEach(id => {
+      const s = document.getElementById(id);
+      const def = {x:0.3,y:0,z:0.2,roll:0,pitch:0,yaw:0};
+      if (id in def) { s.value = def[id]; updateVal(id); }
+    });
+  }
+
+  function updateVal(id) {
+    const v = parseFloat(document.getElementById(id).value);
+    const prec = (id === "roll" || id === "pitch" || id === "yaw") ? 2 : 3;
+    document.getElementById("val-" + id).textContent = v.toFixed(prec);
+  }
+
+  // ── 可达性预校验 (基于 Pinocchio FK 算出的 B601-RS 几何常数) ──
+  // 默认值与 backend/src/rebot_b601_rs_sim/templates/workspace_constants.json 一致;
+  // 若 templates 目录下能找到同名 JSON,会立刻用真值替换。
+  const WK = {
+    shoulder_xyz:     [0.020, 0.0263, 0.145],
+    L_max_m:          0.55,
+    L_min_m:          0.07,
+    warn_ratio:       0.85,
+    dz_floor_m:       -0.10,
+    joint_limits_rad: [],
+    _loaded:          false,
+  };
+  fetch("workspace_constants.json")
+    .then(r => r.ok ? r.json() : null)
+    .then(j => { if (j) { Object.assign(WK, j, {_loaded: true}); _reachRender(); } })
+    .catch(() => { /* JSON 缺失时使用兜底默认值 */ });
+
+  function classifyPrecheck(vals) {
+    const [sx, sy, sz] = WK.shoulder_xyz;
+    const dx = +vals.x - sx, dy = +vals.y - sy, dz = +vals.z - sz;
+    const r  = Math.sqrt(dx*dx + dy*dy + dz*dz);
+    if (dz < WK.dz_floor_m)              return { tier:"fail", r, msg:`z 低于肩部死区` };
+    if (r > WK.L_max_m)                  return { tier:"fail", r, msg:`r=${r.toFixed(3)} > L_max=${WK.L_max_m}` };
+    if (r < WK.L_min_m)                  return { tier:"fail", r, msg:`r=${r.toFixed(3)} < L_min=${WK.L_min_m}` };
+    if (r > WK.warn_ratio * WK.L_max_m)  return { tier:"warn", r, msg:`r=${r.toFixed(3)} 接近边界` };
+    return { tier:"ok", r, msg:"可达" };
+  }
+
+  function paintSliders(tier) {
+    for (const id of ["x","y","z"]) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      el.classList.remove("ok","warn","fail");
+      el.classList.add(tier);
+    }
+  }
+
+  function _reachRender() {
+    const v = Object.fromEntries(SLIDERS.map(i => [i, document.getElementById(i).value]));
+    const c = classifyPrecheck(v);
+    paintSliders(c.tier);
+    const box = document.getElementById("reach-status");
+    const tag = document.getElementById("reach-msg");
+    const rt  = document.getElementById("reach-r");
+    if (box) box.classList.remove("ok","warn","fail"), box.classList.add(c.tier);
+    if (tag) tag.textContent = WK._loaded ? `可达性 · ${c.msg}` : `可达性 · 兜底默认 · ${c.msg}`;
+    if (rt)  rt.textContent  = `r=${c.r.toFixed(3)} · Lmax=${WK.L_max_m}`;
+  }
+
+  // 滑块鼠标拖动 → 发送绝对目标 + 前端可达性预校验
+  let _serverSync = false;
+  _reachRender();
+  SLIDERS.forEach(id => {
+    const el = document.getElementById(id);
+    el.addEventListener("input", () => {
+      updateVal(id);
+      if (id === "x" || id === "y" || id === "z") _reachRender();
+      // 用户手动拖滑条:主动打断任何速度通道 (摇杆 / Z 按钮),避免两条指令同时驱动机械臂
+      if (joyState.active || zBtnState.active) {
+        joyState.active = false; joyState.vx = 0; joyState.vy = 0;
+        if (zBtnState.active) { zBtnState.active = false; zBtnState.dir = 0; }
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({type: "velocity", vx: 0, vy: 0, vz: 0}));
+        }
+      }
+      if (!_serverSync && document.getElementById("auto-send").checked) sendTarget();
+    });
+  });
+
+  document.getElementById("btn-send").addEventListener("click", () => sendTarget(true));
+  document.getElementById("btn-home").addEventListener("click", sendHome);
+
+  // ── 速度倍率滑条 ──
+  document.getElementById("speed-scale").addEventListener("input", function () {
+    const scale = parseFloat(this.value);
+    document.getElementById("val-speed-scale").textContent = scale.toFixed(2) + " x";
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "speed_scale", scale: scale }));
+    }
+  });
+
+  // ── 夹爪滑条：0° 闭合 ~ 345° 张开，实时发送 7 号电机角度（deg）──
+  document.getElementById("gripper").addEventListener("input", function () {
+    const deg = parseFloat(this.value);
+    document.getElementById("val-gripper").textContent = deg.toFixed(0) + "°";
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "gripper", angle: deg }));
+    }
+  });
+
+  // ── 统一增量速率 (units/s) ──
+  const RATE = 0.01;
+  const JOY_RATE = 0.02;
+
+  // ── 共享状态 ──
+  let _rafUpdating = false;
+  const joyState = { active: false, vx: 0, vy: 0 };
+  const keyState = {};
+  const zBtnState = { active: false, dir: 0 };
+
+  // ── 动画驱动循环 (累加器模式) ──
+  const _acc = { x:0, y:0, z:0, roll:0, pitch:0, yaw:0 };
+  let _lastTick = performance.now();
+  function tick(now) {
+    const dt = Math.min((now - _lastTick) / 1000, 0.1);
+    _lastTick = now;
+    _rafUpdating = true;
+
+    // 键盘持续按下 → 累加
+    for (const [key, [id, dir]] of Object.entries(KB_MAP)) {
+      if (keyState[key]) _acc[id] += dir * RATE * dt;
+    }
+
+
+    // 摇杆已切换到独立的"速度通道",不再写 _acc,以免与拖条/键盘的精确通道混淆
+
+    // Z 按钮已切到独立的"速度通道",不再写 _acc,以保持方案 D 一致性
+    // 周期性 heartbeat:重发 vz,防止长按中 WS 漏消息丢失 vz 状态
+    if (zBtnState.active) {
+      _z_vel_tick = (_z_vel_tick + 1) % 6;   // ~10 Hz @ 60 fps
+      if (_z_vel_tick === 0) emitZVelocity();
+    } else {
+      _z_vel_tick = 0;
+    }
+
+    // 所有轴统一应用超步长的累加量
+    let changed = false;
+    for (const id of ["x","y","z","roll","pitch","yaw"]) {
+      const a = _acc[id];
+      const el = document.getElementById(id);
+      const step = parseFloat(el.step)
+      if (Math.abs(a) < step) continue;
+      const steps = Math.round(a / step);
+      let v = parseFloat(el.value) + steps * step;
+      v = Math.min(parseFloat(el.max), Math.max(parseFloat(el.min), v));
+      el.value = v;
+      _acc[id] -= steps * step;
+      updateVal(id);
+      changed = true;
+    }
+
+    _rafUpdating = false;
+    if (changed && document.getElementById("auto-send").checked) sendTarget();
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  // ── 摇杆 (增量, X↔Y 对调) ──
+  (function initJoystick() {
+    const pad = document.getElementById("joystick-pad");
+    const knob = document.getElementById("joystick-knob");
+    const posDisp = document.getElementById("joystick-pos");
+    let dragging = false;
+
+    // 推到 100% 对应的笛卡尔线速度 (m/s),与后端 JOY_LINEAR_SPEED 对齐
+    const JOY_VMAX = 1.00;
+
+    function emitVelocity() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({
+        type: "velocity",
+        vx: joyState.vx * JOY_VMAX,
+        vy: joyState.vy * JOY_VMAX,
+        vz: 0,
+      }));
+    }
+
+    function resetKnob() {
+      knob.style.left = "50%"; knob.style.top = "50%";
+      joyState.active = false; joyState.vx = 0; joyState.vy = 0;
+      posDisp.textContent = "vx=0.000 m/s  vy=0.000 m/s · 速度通道";
+      emitVelocity();                       // 推送 vx=vy=0,后端立即停积分
+    }
+
+    function handleEvent(clientX, clientY) {
+      const rect = pad.getBoundingClientRect();
+      const r = rect.width / 2;
+      let cx = clientX - rect.left;
+      let cy = clientY - rect.top;
+      const dx = cx - r, dy = cy - r;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      let ndx, ndy;
+      if (dist > r) {
+        ndx = dx / dist; ndy = dy / dist;
+        cx = ndx * r + r; cy = ndy * r + r;
+      } else if (dist < 2) {
+        ndx = 0; ndy = 0;
+      } else {
+        ndx = dx / dist; ndy = dy / dist;
+      }
+      knob.style.left = cx + "px";
+      knob.style.top = cy + "px";
+
+      const fraction = Math.min(dist / r, 1.0);
+      joyState.active = true;
+      joyState.vx = -ndy * fraction;        // X: 摇杆↑/↓ → 机械臂 +X/-X  (保持原手感)
+      joyState.vy = -ndx * fraction;       // Y: 摇杆→/← → 机械臂 -Y/+Y  (反向)
+      posDisp.textContent = `vx=${(joyState.vx*JOY_VMAX).toFixed(3)} m/s  vy=${(joyState.vy*JOY_VMAX).toFixed(3)} m/s · 速度通道`;
+      emitVelocity();                       // 直接推 WS,不再走 _acc
+    }
+
+    pad.addEventListener("mousedown", e => { dragging = true; pad.classList.add("active"); handleEvent(e.clientX, e.clientY); });
+    window.addEventListener("mousemove", e => { if (dragging) handleEvent(e.clientX, e.clientY); });
+    window.addEventListener("mouseup", () => { dragging = false; pad.classList.remove("active"); resetKnob(); });
+    pad.addEventListener("touchstart", e => { e.preventDefault(); dragging = true; pad.classList.add("active"); const t = e.touches[0]; handleEvent(t.clientX, t.clientY); });
+    window.addEventListener("touchmove", e => { if (dragging) { const t = e.touches[0]; handleEvent(t.clientX, t.clientY); } });
+    window.addEventListener("touchend", () => { dragging = false; pad.classList.remove("active"); resetKnob(); });
+    resetKnob();
+  })();
+
+  // ── Z 按钮: 走速度通道 (与摇杆共用 type=velocity 消息) ──
+  // 长按期间发 vz ≠ 0,松开发 vz = 0,后端 OSC 块直接积分 — 与方案 D 一致。
+  // 同时兼容键盘 E/D: KB_MAP 中 e/d 对应 z,那部分走 _acc 累加 + 滑条;若用户
+    // 已经按了 Z 按钮,滑条 input 监听器会顺手把 vz 也置 0 (见 SLIDERS.forEach)。
+  const VZ_MAX = 0.50;                  // m/s,Z 按钮推满对应线速度
+  let _z_vel_tick = 0;                  // heartbeat 计时器 (见 tick())
+
+  function emitZVelocity() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    // 注意:同时发送当前 vx/vy 也置 0 + 把 joystick 的方向也置 0,
+    //        这样 Z 按钮按下时与摇杆不会在 OSC 处叠加
+    ws.send(JSON.stringify({
+      type: "velocity",
+      vx: 0,
+      vy: 0,
+      vz: zBtnState.active ? zBtnState.dir * VZ_MAX : 0.0,
+    }));
+  }
+
+  (function initZButtons() {
+    const zUp = document.getElementById("z-up");
+    const zDown = document.getElementById("z-down");
+
+    zUp.addEventListener("mousedown", e => {
+      e.preventDefault();
+      zBtnState.active = true;
+      zBtnState.dir = 1;
+      emitZVelocity();                    // 立即推 vz = +VZ_MAX
+    });
+    zDown.addEventListener("mousedown", e => {
+      e.preventDefault();
+      zBtnState.active = true;
+      zBtnState.dir = -1;
+      emitZVelocity();                    // 立即推 vz = -VZ_MAX
+    });
+
+    // 松开时停止 (window 级, 防止鼠标移出按钮时丢事件)
+    window.addEventListener("mouseup", () => {
+      if (zBtnState.active) {
+        zBtnState.active = false;
+        emitZVelocity();                  // 推 vz = 0
+      }
+    });
+
+    // touch 端 (移动端):同样处理
+    zUp.addEventListener("touchstart", e => { e.preventDefault(); zBtnState.active = true; zBtnState.dir = 1; emitZVelocity(); });
+    zDown.addEventListener("touchstart", e => { e.preventDefault(); zBtnState.active = true; zBtnState.dir = -1; emitZVelocity(); });
+    const _zRelease = () => { if (zBtnState.active) { zBtnState.active = false; emitZVelocity(); } };
+    zUp.addEventListener("touchend", _zRelease);
+    zDown.addEventListener("touchend", _zRelease);
+    zUp.addEventListener("touchcancel", _zRelease);
+    zDown.addEventListener("touchcancel", _zRelease);
+  })();
+
+  // ── 键盘: 按下/松开设置状态, rAF 累加器驱动 ──
+  const KB_MAP = {
+    q: ["x", -1], a: ["x", 1],
+    w: ["y", -1], s: ["y", 1],
+    e: ["z", -1], d: ["z", 1],
+    r: ["roll", -1], f: ["roll", 1],
+    t: ["pitch", -1], g: ["pitch", 1],
+    y: ["yaw", -1], h: ["yaw", 1],
+  };
+  let _flashTimer = null;
+
+  function flashSlider(id) {
+    const grp = document.getElementById(id).closest(".slider-group");
+    grp.classList.add("highlight");
+    clearTimeout(_flashTimer);
+    _flashTimer = setTimeout(() => grp.classList.remove("highlight"), 600);
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+    const key = e.key.toLowerCase();
+    if (!(key in KB_MAP)) return;
+    e.preventDefault();
+    if (!e.repeat) { keyState[key] = true; flashSlider(KB_MAP[key][0]); }
+  });
+  document.addEventListener("keyup", (e) => {
+    const key = e.key.toLowerCase();
+    keyState[key] = false;
+  });
+
+  // 服务端位姿回传 → 同步滑块
+  // (已通过 ws.onmessage pose 处理中的 _serverSync 标志同步)
+  connect();
+</script>
+</body>
+</html>

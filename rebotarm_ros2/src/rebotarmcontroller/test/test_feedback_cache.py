@@ -74,3 +74,48 @@ def test_cached_gripper_state_does_not_poll_hardware():
     assert velocity == -0.4
     assert torque == 0.7
     assert status == 0
+
+
+def test_gravity_torque_uses_configured_per_joint_scale():
+    manager = HardwareManager.__new__(HardwareManager)
+    manager._arm_group = SimpleNamespace(joint_names=["joint1", "joint2"])
+    manager._gravity_comp_joint_direction = np.ones(2)
+    manager._gravity_comp_tau_scale = np.array([1.0, 1.55])
+    manager._gc_model = object()
+    manager._gc_data = object()
+    manager._pad_q_for_model = lambda _model, q, _size: q
+    manager._gc_compute_generalized_gravity = (
+        lambda _model, _q, _data: np.array([2.0, 3.0])
+    )
+
+    torque = manager._gravity_comp_torque(np.zeros(2))
+
+    np.testing.assert_allclose(torque, [2.0, 4.65])
+
+
+def test_gravity_transition_smoothly_reduces_hold_gains():
+    manager = HardwareManager.__new__(HardwareManager)
+    manager._gravity_comp_transition_duration = 0.5
+    manager._arm_mit_kp = np.array([80.0, 150.0])
+    manager._arm_mit_kd = np.array([5.0, 10.0])
+    manager._gravity_comp_kp = np.array([2.0, 2.0])
+    manager._gravity_comp_kd = np.array([1.0, 1.0])
+
+    start_kp, start_kd = manager._gravity_comp_transition_gains(0.0)
+    middle_kp, middle_kd = manager._gravity_comp_transition_gains(0.25)
+    final_kp, final_kd = manager._gravity_comp_transition_gains(0.5)
+
+    np.testing.assert_allclose(start_kp, manager._arm_mit_kp)
+    np.testing.assert_allclose(start_kd, manager._arm_mit_kd)
+    np.testing.assert_allclose(
+        middle_kp, (manager._arm_mit_kp + manager._gravity_comp_kp) / 2.0
+    )
+    np.testing.assert_allclose(
+        middle_kd, (manager._arm_mit_kd + manager._gravity_comp_kd) / 2.0
+    )
+    np.testing.assert_allclose(final_kp, manager._gravity_comp_kp)
+    np.testing.assert_allclose(final_kd, manager._gravity_comp_kd)
+
+    assert manager._gravity_comp_transition_blend(0.0) == 0.0
+    assert manager._gravity_comp_transition_blend(0.25) == 0.5
+    assert manager._gravity_comp_transition_blend(0.5) == 1.0

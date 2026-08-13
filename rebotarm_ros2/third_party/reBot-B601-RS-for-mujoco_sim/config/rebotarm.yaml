@@ -1,0 +1,52 @@
+# B601-RS 机械臂与夹爪仿真控制参数
+# 供 examples/06_interactive_ik_mujoco.py 及其他需要物理控制的示例共享。
+
+arm:
+  n_joints: 6
+  joint_names:
+    - joint1
+    - joint2
+    - joint3
+    - joint4
+    - joint5
+    - joint6
+
+  # POS_VEL 串级控制器参数（对应真实电机 POS_VEL 模式）
+  pos_vel:
+    # 位置环比例增益 (s^-1)
+    pos_kp: [13.0, 16.0, 14.0, 20.0, 10.0, 10.0]
+    # 速度环比例增益 (N·m / (rad/s))
+    vel_kp: [12.0, 14.0, 14.0, 5.0, 4.0, 4.0]
+    # 速度环积分增益 (N·m / (rad/s) * s)
+    vel_ki: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+    # 速度限制 (rad/s)
+    vlim: [10.0, 10.0, 10.0, 10.0, 10.0, 10.0]
+    # 输出力矩限制 (N·m)
+    tau_max: [36.0, 36.0, 36.0, 36.0, 36.0, 36.0]
+
+  # 力矩输出一阶低通滤波系数（越小越平滑，1.0 表示无滤波）
+  output_filter_alpha: 0.3
+
+gripper:
+  # 夹爪驱动关节（通过 equality 约束带动 joint_left / joint_right）
+  joint_name: joint7
+  finger_joints:
+    - joint_left
+    - joint_right
+
+  # 真实 7 号电机 0°（闭合）~ 345°（张开）→ MuJoCo 直线位移 0 ~ 0.05 m
+  deg_max: 345.0
+  disp_max: 0.05
+
+  # 夹爪 PD 控制器参数
+  pd:
+    kp: 1500.0
+    kv: 100.0
+    tau_max: 500.0
+    # 摩擦补偿偏置：接近目标时提供额外力矩，克服静摩擦
+    bias: 5.0
+
+# 运动规划参数
+motion:
+  # 笛卡尔运动速度 (m/s)，用于估算轨迹时长
+  linear_speed: 0.15

@@ -117,7 +117,11 @@
           id,
           service,
           type,
-          args: args || {}
+          args: args || {},
+          // rosbridge has its own (normally 5 s) service timeout. Keep it in
+          // sync with the browser-side timer so a valid slow IK response is
+          // not discarded halfway through the request.
+          timeout: Math.max(timeoutMs / 1000, 0.1)
         });
       });
     }
@@ -171,6 +175,9 @@
     solveMoveToPoseIK(pose) {
       return this.callService(`/${this.namespace}/move_to_pose_ik`, 'rebotarm_msgs/srv/MoveToPoseIK', {
         target_pose: pose
+      }, {
+        timeoutMs: 20000,
+        retryOnTimeout: false
       });
     }
 
@@ -263,11 +270,17 @@
     }
 
     getRosTopics() {
-      return this.callService('/rosapi/topics', 'rosapi_msgs/srv/Topics', {});
+      return this.callService('/rosapi/topics', 'rosapi_msgs/srv/Topics', {}, {
+        timeoutMs: 8000,
+        retryOnTimeout: false
+      });
     }
 
     getRosServices() {
-      return this.callService('/rosapi/services', 'rosapi_msgs/srv/Services', {});
+      return this.callService('/rosapi/services', 'rosapi_msgs/srv/Services', {}, {
+        timeoutMs: 8000,
+        retryOnTimeout: false
+      });
     }
 
     getLastMessageAt(topic) {

@@ -106,6 +106,9 @@ class HardwareManager:
         gc_runtime = runtime_config["gravity_compensation"]
         self._gravity_comp_kp = np.array(gc_runtime["kp"], dtype=np.float64)
         self._gravity_comp_kd = np.array(gc_runtime["kd"], dtype=np.float64)
+        self._gravity_comp_transition_duration = float(
+            gc_runtime["transition_duration"]
+        )
         self._gravity_comp_joint_direction = np.array(
             gc_runtime["joint_direction"],
             dtype=np.float64,
@@ -123,6 +126,8 @@ class HardwareManager:
         self._gravity_comp_active = False
         self._gravity_comp_q_target: np.ndarray | None = None
         self._gravity_comp_q_last: np.ndarray | None = None
+        self._gravity_comp_transition_q_hold: np.ndarray | None = None
+        self._gravity_comp_transition_started_at: float | None = None
         self._cached_arm_position = np.zeros(len(self.joint_names), dtype=np.float64)
         self._cached_arm_velocity = np.zeros(len(self.joint_names), dtype=np.float64)
         self._cached_arm_torque = np.zeros(len(self.joint_names), dtype=np.float64)
@@ -452,6 +457,8 @@ class HardwareManager:
                     self._gravity_comp_active = False
                     self._gravity_comp_q_target = None
                     self._gravity_comp_q_last = None
+                    self._gravity_comp_transition_q_hold = None
+                    self._gravity_comp_transition_started_at = None
                 else:
                     self.stop_gravity_compensation()
             else:
@@ -662,15 +669,27 @@ class HardwareManager:
 
         # Read the real pose before changing mode.  This pose, not zero, is
         # the first MIT target when gravity compensation starts away from home.
-        q_hold = self._arm_group.get_positions(
-            request_feedback=True,
-        ).copy()
+        q_hold, qd_hold, _ = self.get_joint_state(request_feedback=True)
+        q_hold = q_hold.copy()
+        self._cached_arm_position = q_hold.copy()
+        self._cached_arm_velocity = qd_hold.copy()
         tau_hold = self._gravity_comp_torque(q_hold)
         self._gravity_comp_q_target = q_hold.copy()
         self._gravity_comp_q_last = q_hold.copy()
+        self._gravity_comp_transition_q_hold = q_hold.copy()
+        self._gravity_comp_transition_started_at = None
 
         try:
-            self._enter_gravity_compensation_mode(q_hold, tau_hold)
+            # Begin at the already-active position-hold gains.  The control
+            # loop follows measured position while smoothly reducing these
+            # gains to the compliant gravity-compensation values.
+            self._enter_group_mit_at_current(
+                self._arm_group,
+                q_hold,
+                tau_hold,
+                self._arm_mit_kp,
+                self._arm_mit_kd,
+            )
             gripper_hold = None
             if self.has_gripper:
                 gripper_hold = self._gripper_group.get_positions().copy()
@@ -691,14 +710,18 @@ class HardwareManager:
                 self._arm_group.send_mit(
                     q_hold,
                     vel=np.zeros(len(self.joint_names)),
-                    kp=self._gravity_comp_kp,
-                    kd=self._gravity_comp_kd,
+                    kp=self._arm_mit_kp,
+                    kd=self._arm_mit_kd,
                     tau=tau_hold,
                 )
                 if gripper_hold is not None:
                     self._gripper_group.send_mit(gripper_hold)
                 self._enabled = True
 
+            # Start the fade only after every motor has entered MIT and is
+            # holding the measured pose.  Mode-switch latency must not consume
+            # part of the configured transition interval.
+            self._gravity_comp_transition_started_at = time.perf_counter()
             self._gravity_comp_active = True
             arm_rate = float(getattr(self._robot, "_rate", 500.0))
             self._gravity_comp_tick(self._robot, 1.0 / arm_rate)
@@ -708,6 +731,8 @@ class HardwareManager:
             self._gravity_comp_active = False
             self._gravity_comp_q_target = None
             self._gravity_comp_q_last = None
+            self._gravity_comp_transition_q_hold = None
+            self._gravity_comp_transition_started_at = None
             if self._enabled and not self.control_loop_active:
                 self._start_endpos_hold(target=q_hold)
             raise
@@ -725,6 +750,8 @@ class HardwareManager:
         self._gravity_comp_active = False
         self._gravity_comp_q_target = None
         self._gravity_comp_q_last = None
+        self._gravity_comp_transition_q_hold = None
+        self._gravity_comp_transition_started_at = None
         if self._enabled:
             self._start_endpos_hold(target=hold_target)
         self.set_state_machine("IDLE")
@@ -750,19 +777,6 @@ class HardwareManager:
             tau_model
             * self._gravity_comp_joint_direction
             * self._gravity_comp_tau_scale
-        )
-
-    def _enter_gravity_compensation_mode(
-        self,
-        q_hold: np.ndarray,
-        tau_hold: np.ndarray,
-    ) -> None:
-        self._enter_group_mit_at_current(
-            self._arm_group,
-            q_hold,
-            tau_hold,
-            self._gravity_comp_kp,
-            self._gravity_comp_kd,
         )
 
     @staticmethod
@@ -820,20 +834,60 @@ class HardwareManager:
             return
 
         q = self._read_gravity_comp_positions(request=False)
-        self._gravity_comp_q_target = q.copy()
         tau_motor = self._gravity_comp_torque(q)
+        transition_started_at = self._gravity_comp_transition_started_at
+        elapsed = (
+            self._gravity_comp_transition_duration
+            if transition_started_at is None
+            else max(0.0, time.perf_counter() - transition_started_at)
+        )
+        blend = self._gravity_comp_transition_blend(elapsed)
+        kp, kd = self._gravity_comp_transition_gains(elapsed)
+        q_hold = self._gravity_comp_transition_q_hold
+        q_target = (
+            q.copy()
+            if q_hold is None
+            else q_hold + blend * (q - q_hold)
+        )
+        if blend >= 1.0:
+            self._gravity_comp_transition_q_hold = None
+        self._gravity_comp_q_target = q_target.copy()
 
         self._arm_group.send_mit(
-            q,
+            q_target,
             vel=np.zeros(len(self.joint_names)),
-            kp=self._gravity_comp_kp,
-            kd=self._gravity_comp_kd,
+            kp=kp,
+            kd=kd,
             tau=tau_motor,
         )
         if self.has_gripper:
             self._gripper_group.send_mit(
                 np.array([self._cached_gripper_position], dtype=np.float64)
             )
+
+    def _gravity_comp_transition_gains(
+        self, elapsed: float
+    ) -> tuple[np.ndarray, np.ndarray]:
+        blend = self._gravity_comp_transition_blend(elapsed)
+        kp = self._arm_mit_kp + blend * (
+            self._gravity_comp_kp - self._arm_mit_kp
+        )
+        kd = self._arm_mit_kd + blend * (
+            self._gravity_comp_kd - self._arm_mit_kd
+        )
+        return kp, kd
+
+    def _gravity_comp_transition_blend(self, elapsed: float) -> float:
+        ratio = float(
+            np.clip(
+                elapsed / max(self._gravity_comp_transition_duration, 1e-6),
+                0.0,
+                1.0,
+            )
+        )
+        # Smoothstep has zero slope at both ends, avoiding a gain derivative
+        # step when entering the compliant mode.
+        return ratio * ratio * (3.0 - 2.0 * ratio)
 
     # ------------------------------------------------------------------
     # gripper
@@ -1118,9 +1172,6 @@ class HardwareManager:
                 tau_ff = self._gravity_comp_torque(
                     self._cached_arm_position.copy()
                 )
-                if len(tau_ff) > 2:
-                    # Preserve the SDK's established J2/J3 compensation.
-                    tau_ff[1:3] *= 1.55
                 self._arm_group.send_mit(
                     self._endpos_ctrl._q_target,
                     vel=self._endpos_ctrl._qd_target,

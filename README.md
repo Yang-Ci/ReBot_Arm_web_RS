@@ -6,6 +6,7 @@ RS 专用 MuJoCo 动力学场景、视觉检测、轨迹/IK 和 MCP 抓取 Agent
 本工程不把 DM 模型简单换皮为 RS。RS 使用独立机械模型、MIT 控制、125 Hz 在线平滑、
 真机反馈动画和安全状态机。具体差异见：
 
+- [完整中文使用手册](USER_MANUAL_ZH.md)
 - [DM/RS 控制模式、频率、速度与优化对比](DM_RS_COMPARISON_ZH.md)
 - [RS 数据流与处理链](DATA_FLOW_RS_ZH.md)
 - [完整开发者手册](DEVELOPER_GUIDE_ZH.md)
@@ -37,14 +38,16 @@ cd /home/robot/reBot_Arm_Mujoco-RS
 ./rebotarm doctor        # 安装完成后复查
 ```
 
-安装会拉取并固定以下经过验证的上游版本：
+控制 SDK 与 MuJoCo 源码已经作为本仓库的普通文件保存在
+`rebotarm_ros2/third_party/`，不是 submodule，也不是嵌套 Git 仓库。一次普通 clone 即可
+取得完整源码。它们的上游基线为：
 
 - `vectorBH6/reBotArm_control_py`：`40ab6ce58fec3c58cb603efb3f30240d6f5849e4`
 - `LAN-GER/reBot-B601-RS-for-mujoco_sim`：`1249cb6efdf393ba636056fc41df30dc6ba389aa`
 
-随后自动应用 `patches/` 和 `vendor_overrides/`、创建独立 Python venv，并执行 rosdep 和
-`colcon build --symlink-install`。已有 `.env` 不会被覆盖；已有 SDK/模型 checkout 不会被
-删除或重置，但经过验证的补丁与资源覆盖会被重复检查并应用。
+安装脚本只检查这些本地源码是否存在，然后创建独立 Python venv、执行 rosdep 和
+`colcon build --symlink-install`。它不会联网拉取或重置 SDK/MuJoCo 源码；已有 `.env`
+也不会被覆盖。
 
 ## 快速启动仿真
 
@@ -191,19 +194,15 @@ node --check reBotArm_simulator-RS/public/js/ros/rebot-ros-ui.js
 node --check reBotArm_simulator-RS/public/js/rebot-sim.js
 ```
 
-## 第三方资源的可复现维护
+## 本地源码维护
 
-`rebotarm_ros2/third_party/` 由 setup 生成，不应把嵌套 Git 仓库直接提交到主仓库：
-
-- SDK 修改放入 `patches/rebotarm_control_py_rs.patch`；
-- RS MJCF/网格修改放入 `vendor_overrides/reBot-B601-RS-for-mujoco_sim/`；
-- `scripts/setup_rs_workspace.sh` 从固定提交重建并应用覆盖。
-
-这样新机器执行 `./setup.sh` 能重现相同的控制 SDK 与 MuJoCo 场景。
+`rebotarm_ros2/third_party/` 中的 SDK 和 MuJoCo 源码由本仓库直接跟踪。不要在其中运行
+`git init`，也不要再 clone 形成嵌套仓库。更新上游时直接审查普通文件差异并提交到本
+仓库，确保其他用户只需 clone 一次即可得到完整工程。来源基线见
+[`rebotarm_ros2/third_party/README.md`](rebotarm_ros2/third_party/README.md)。
 
 ## 安全与提交约定
 
-- 未明确要求时，不自动 commit、push 或创建 PR；
 - 不提交 `.env`、密钥、ROS bag、`build/`、`install/`、`log/`；
 - 真机参数更改必须先仿真、再低速单关节、最后完整回归；
-- 普通问题优先查 [数据流文档](DATA_FLOW_RS_ZH.md)，不要靠无限叠加插值掩盖底层误差。
+- 普通问题优先查 [数据流文档](DATA_FLOW_RS_ZH.md)

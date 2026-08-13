@@ -8,6 +8,7 @@ import time
 import mujoco
 import numpy as np
 import rclpy
+from geometry_msgs.msg import PoseStamped
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -26,6 +27,10 @@ _UPSTREAM_RELATIVE_MODEL = Path(
 )
 _GRASP_SCENE_NAME = "rs_grasp_scene.xml"
 _DEFAULT_OBJECTS = ("red_cube", "blue_block", "yellow_cylinder")
+_TARGET_MATERIAL_RGBA = np.array([1.0, 0.55, 0.12, 0.72], dtype=np.float32)
+_TARGET_SITE_RGBA = np.array([1.0, 0.55, 0.12, 0.35], dtype=np.float32)
+_TARGET_HIDDEN_POS = np.array([0.0, 0.0, -10.0], dtype=np.float64)
+_TARGET_HIDDEN_QUAT = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
 
 
 def find_default_model() -> Path:
@@ -53,6 +58,8 @@ class RsMujocoSync(Node):
         self.declare_parameter("arm_namespace", "rebotarm_rs")
         self.declare_parameter("input_topic", "")
         self.declare_parameter("output_topic", "")
+        self.declare_parameter("target_pose_topic", "")
+        self.declare_parameter("target_visible_timeout", 0.7)
         self.declare_parameter("model_path", "")
         self.declare_parameter("simulation_mode", "kinematic")
         self.declare_parameter("update_rate", 250.0)
@@ -64,7 +71,11 @@ class RsMujocoSync(Node):
         self.declare_parameter("arm_kp", [80.0, 100.0, 100.0, 35.0, 25.0, 18.0])
         self.declare_parameter("arm_kd", [8.0, 10.0, 10.0, 4.0, 3.0, 2.5])
         self.declare_parameter("gripper_kp", 300.0)
-        self.declare_parameter("gripper_kd", 120.0)
+        # kd=120 was heavily overdamped: the fake driver completed a full
+        # stroke in ~1 s, while the MuJoCo fingers needed ~7 s to enter the
+        # browser's open tolerance. kd=40 retains stable contact but follows
+        # the commanded stroke promptly.
+        self.declare_parameter("gripper_kd", 40.0)
         self.declare_parameter("gripper_tau_limit", 150.0)
 
         namespace = str(self.get_parameter("arm_namespace").value).strip("/")
@@ -72,6 +83,10 @@ class RsMujocoSync(Node):
         output_topic = str(self.get_parameter("output_topic").value).strip()
         input_topic = input_topic or f"/{namespace}/joint_states"
         output_topic = output_topic or f"/{namespace}/mujoco/joint_states"
+        target_pose_topic = str(
+            self.get_parameter("target_pose_topic").value
+        ).strip()
+        target_pose_topic = target_pose_topic or f"/{namespace}/mujoco/target_pose"
 
         requested_path = str(self.get_parameter("model_path").value).strip()
         self.model_path = (
@@ -101,10 +116,37 @@ class RsMujocoSync(Node):
         self.gripper_kp = float(self.get_parameter("gripper_kp").value)
         self.gripper_kd = float(self.get_parameter("gripper_kd").value)
         self.gripper_tau_limit = float(self.get_parameter("gripper_tau_limit").value)
+        self.target_visible_timeout = max(
+            float(self.get_parameter("target_visible_timeout").value),
+            0.0,
+        )
 
         self.model = mujoco.MjModel.from_xml_path(str(self.model_path))
         self.data = mujoco.MjData(self.model)
         mujoco.mj_forward(self.model, self.data)
+        target_body_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, "ik_target"
+        )
+        if target_body_id >= 0:
+            self.target_mocap_id = int(self.model.body_mocapid[target_body_id])
+            if self.target_mocap_id < 0:
+                self.get_logger().warn(
+                    "ik_target is not a mocap body; target pose visualization disabled"
+                )
+        else:
+            self.target_mocap_id = -1
+            self.get_logger().warn(
+                "ik_target body not found; target pose visualization disabled"
+            )
+        self.target_mat_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_MATERIAL, "target_mat"
+        )
+        self.target_geom_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_GEOM, "ik_target_sphere"
+        )
+        self.target_site_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_SITE, "ik_target_site"
+        )
         self.arm_joint_ids = np.array(
             [self._required_id(mujoco.mjtObj.mjOBJ_JOINT, name) for name in _ARM_JOINTS]
         )
@@ -150,6 +192,11 @@ class RsMujocoSync(Node):
             float(self.get_parameter("object_publish_rate").value), 1.0
         )
 
+        self._target_pose: tuple[np.ndarray, np.ndarray] | None = None
+        self._target_pose_monotonic: float | None = None
+        self._target_visible = True
+        self._set_target_visible_locked(False)
+
         self.target_arm = self.data.qpos[self.arm_qpos_addrs].copy()
         self.target_gripper = 0.0
         self.last_input_time = 0.0
@@ -172,6 +219,12 @@ class RsMujocoSync(Node):
             self._joint_state_callback,
             qos_profile_sensor_data,
         )
+        self.target_pose_subscription = self.create_subscription(
+            PoseStamped,
+            target_pose_topic,
+            self._target_pose_callback,
+            qos_profile_sensor_data,
+        )
         self.reset_service = self.create_service(
             Trigger,
             f"/{namespace}/mujoco/reset",
@@ -187,7 +240,8 @@ class RsMujocoSync(Node):
         self.timer = self.create_timer(1.0 / self.update_rate, self._update)
         self.get_logger().info(
             f"RS MuJoCo ready: mode={self.simulation_mode}, input={input_topic}, "
-            f"output={output_topic}, model={self.model_path}"
+            f"output={output_topic}, target_pose={target_pose_topic}, "
+            f"model={self.model_path}"
         )
 
     def _vector_parameter(self, name: str) -> np.ndarray:
@@ -218,6 +272,29 @@ class RsMujocoSync(Node):
             )
         self.last_input_time = time.monotonic()
 
+    def _target_pose_callback(self, msg: PoseStamped) -> None:
+        pos = np.array(
+            [
+                float(msg.pose.position.x),
+                float(msg.pose.position.y),
+                float(msg.pose.position.z),
+            ],
+            dtype=np.float64,
+        )
+        quat = np.array(
+            [
+                float(msg.pose.orientation.w),
+                float(msg.pose.orientation.x),
+                float(msg.pose.orientation.y),
+                float(msg.pose.orientation.z),
+            ],
+            dtype=np.float64,
+        )
+        norm = float(np.linalg.norm(quat))
+        quat = _TARGET_HIDDEN_QUAT.copy() if norm < 1e-9 else quat / norm
+        self._target_pose = (pos, quat)
+        self._target_pose_monotonic = time.monotonic()
+
     @staticmethod
     def _visual_to_mujoco_gripper(position: float, visual_open: float) -> float:
         ratio = np.clip(float(position) / visual_open, 0.0, 1.0)
@@ -238,6 +315,8 @@ class RsMujocoSync(Node):
                 self._update_kinematic()
             else:
                 self._update_physics()
+            if self._apply_target_pose_locked():
+                mujoco.mj_forward(self.model, self.data)
             self._publish_state()
             self._publish_object_states()
         if self.viewer is not None:
@@ -264,6 +343,55 @@ class RsMujocoSync(Node):
             [self.gripper_dof_addr, self.left_dof_addr, self.right_dof_addr]
         ] = 0.0
         mujoco.mj_forward(self.model, self.data)
+
+    def _apply_target_pose_locked(self) -> bool:
+        if self.target_mocap_id < 0:
+            return False
+        if self._target_pose is None:
+            return self._set_target_visible_locked(False)
+
+        now = time.monotonic()
+        visible = (
+            self._target_pose_monotonic is not None
+            and now - self._target_pose_monotonic <= self.target_visible_timeout
+        )
+        visual_changed = self._set_target_visible_locked(visible)
+        if not visible:
+            if not np.allclose(
+                self.data.mocap_pos[self.target_mocap_id], _TARGET_HIDDEN_POS
+            ):
+                self.data.mocap_pos[self.target_mocap_id] = _TARGET_HIDDEN_POS
+                self.data.mocap_quat[self.target_mocap_id] = _TARGET_HIDDEN_QUAT
+                return True
+            return visual_changed
+
+        pos, quat = self._target_pose
+        changed = not (
+            np.allclose(self.data.mocap_pos[self.target_mocap_id], pos)
+            and np.allclose(self.data.mocap_quat[self.target_mocap_id], quat)
+        )
+        self.data.mocap_pos[self.target_mocap_id] = pos
+        self.data.mocap_quat[self.target_mocap_id] = quat
+        return bool(changed or visual_changed)
+
+    def _set_target_visible_locked(self, visible: bool) -> bool:
+        if self._target_visible == visible:
+            return False
+        self._target_visible = visible
+        alpha = 1.0 if visible else 0.0
+        if self.target_mat_id >= 0:
+            rgba = _TARGET_MATERIAL_RGBA.copy()
+            rgba[3] *= alpha
+            self.model.mat_rgba[self.target_mat_id] = rgba
+        if self.target_geom_id >= 0:
+            rgba = _TARGET_MATERIAL_RGBA.copy()
+            rgba[3] *= alpha
+            self.model.geom_rgba[self.target_geom_id] = rgba
+        if self.target_site_id >= 0:
+            rgba = _TARGET_SITE_RGBA.copy()
+            rgba[3] *= alpha
+            self.model.site_rgba[self.target_site_id] = rgba
+        return True
 
     def _update_physics(self) -> None:
         timestep = float(self.model.opt.timestep)
@@ -315,11 +443,13 @@ class RsMujocoSync(Node):
             return
         objects = []
         for name, body_id in self.object_body_ids.items():
+            quat_wxyz = [float(value) for value in self.data.xquat[body_id]]
             objects.append(
                 {
                     "name": name,
                     "position": [float(value) for value in self.data.xpos[body_id]],
-                    "quaternion": [float(value) for value in self.data.xquat[body_id]],
+                    "quaternion": quat_wxyz,
+                    "quat_wxyz": quat_wxyz,
                 }
             )
         msg = String()

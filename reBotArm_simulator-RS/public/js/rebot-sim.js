@@ -15,6 +15,16 @@
   const TABLE_DEPTH = 0.36;
   const TABLE_SURFACE_Y = 0.10;
   const TABLE_THICKNESS = 0.03;
+  const MUJOCO_OBJECT_COLORS = Object.freeze({
+    red_cube: 'red',
+    blue_block: 'blue',
+    yellow_cylinder: 'yellow'
+  });
+  const ROS_TO_THREE_FRAME = new THREE.Quaternion().setFromAxisAngle(
+    new THREE.Vector3(1, 0, 0),
+    -Math.PI / 2
+  );
+  const THREE_TO_ROS_FRAME = ROS_TO_THREE_FRAME.clone().invert();
 
   // The URDF supplies the colour. These Web-specific PBR values compensate for
   // Three.js running without an environment map; copying MuJoCo's high metal
@@ -101,6 +111,7 @@
  const commandListeners = new Set();
  const axisLabelSprites = [];
   let carriedObject = null;
+  let mujocoObjectFeedbackAt = 0;
   const taskObjects = new Map();
 
   const els = {
@@ -1903,9 +1914,14 @@
 
   function updateCarriedObject() {
     if (!carriedObject || !carriedObject.mesh || !robot) return;
+    if (hasFreshMujocoObjectFeedback()) return;
     const grip = getFakeGraspPosition(robot) || getTcpPosition(robot);
     if (!grip) return;
     carriedObject.mesh.position.lerp(grip, 0.55);
+  }
+
+  function hasFreshMujocoObjectFeedback() {
+    return mujocoObjectFeedbackAt > 0 && performance.now() - mujocoObjectFeedbackAt < 500;
   }
 
   function attachObject(color) {
@@ -1929,10 +1945,46 @@
     const mesh = carriedObject.mesh;
     mesh.userData.fakeCarried = false;
     if (!options || options.settleOnTable !== false) {
-      mesh.position.y = Number(mesh.userData.tableY) || mesh.position.y;
+      if (!hasFreshMujocoObjectFeedback()) {
+        mesh.position.y = Number(mesh.userData.tableY) || mesh.position.y;
+      }
     }
     carriedObject = null;
     return true;
+  }
+
+  function applyMujocoObjectStates(objects) {
+    if (!Array.isArray(objects)) return;
+    let updated = false;
+    objects.forEach((state) => {
+      const color = MUJOCO_OBJECT_COLORS[String(state && state.name || '')];
+      const mesh = color ? taskObjects.get(color) : null;
+      const position = state && state.position;
+      if (!mesh || !Array.isArray(position) || position.length < 3) return;
+      const rosX = Number(position[0]);
+      const rosY = Number(position[1]);
+      const rosZ = Number(position[2]);
+      if (![rosX, rosY, rosZ].every(Number.isFinite)) return;
+      mesh.position.set(rosX, rosZ, -rosY);
+
+      const quat = state.quat_wxyz || state.quaternion;
+      if (Array.isArray(quat) && quat.length >= 4) {
+        const rosQuat = new THREE.Quaternion(
+          Number(quat[1]),
+          Number(quat[2]),
+          Number(quat[3]),
+          Number(quat[0])
+        );
+        if ([rosQuat.x, rosQuat.y, rosQuat.z, rosQuat.w].every(Number.isFinite)) {
+          mesh.quaternion.copy(ROS_TO_THREE_FRAME)
+            .multiply(rosQuat.normalize())
+            .multiply(THREE_TO_ROS_FRAME);
+        }
+      }
+      mesh.userData.restPosition = mesh.position.clone();
+      updated = true;
+    });
+    if (updated) mujocoObjectFeedbackAt = performance.now();
   }
 
   function animate(now) {
@@ -2203,6 +2255,9 @@
     },
     getCarriedObject() {
       return carriedObject ? carriedObject.color : null;
+    },
+    syncMujocoObjectStates(objects) {
+      applyMujocoObjectStates(objects);
     },
     stopMotion() {
       stopActiveMotion();

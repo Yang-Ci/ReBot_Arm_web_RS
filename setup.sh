@@ -7,8 +7,6 @@ WEB_DIR="${ROOT_DIR}/reBotArm_simulator-RS"
 VENV_DIR="${WS_DIR}/.venv"
 SDK_DIR="${WS_DIR}/third_party/reBotArm_control_py"
 MUJOCO_SOURCE_DIR="${WS_DIR}/third_party/reBot-B601-RS-for-mujoco_sim"
-SDK_REF="40ab6ce58fec3c58cb603efb3f30240d6f5849e4"
-MUJOCO_REF="1249cb6efdf393ba636056fc41df30dc6ba389aa"
 CHECK_ONLY=0
 ASSUME_YES=0
 
@@ -25,10 +23,10 @@ Usage: ./setup.sh [--check] [--yes]
   --yes    Non-interactive package installation (sudo may request a password).
   -h       Show this help.
 
-The installer preserves existing configuration and third-party working trees.
-It installs only missing system dependencies, then delegates the reproducible
-SDK/model checkout, Python environment, rosdep, and colcon build to
-scripts/setup_rs_workspace.sh.
+The installer preserves existing configuration. The control SDK and MuJoCo
+sources are vendored as ordinary files in this repository. This command
+installs only missing dependencies, then creates the Python environment and
+builds the ROS workspace through scripts/setup_rs_workspace.sh.
 EOF
 }
 
@@ -235,23 +233,22 @@ else
   record_failed 'node command missing'
 fi
 
-log 'Checking pinned RS third-party sources'
-check_git_revision() {
-  local label="$1" path="$2" expected="$3"
-  if [[ ! -d "${path}/.git" ]]; then
-    if ((CHECK_ONLY)); then record_failed "${label} missing: ${path}"; fi
-    return
-  fi
-  local actual
-  actual="$(git -C "${path}" rev-parse HEAD 2>/dev/null || true)"
-  if [[ "${actual}" == "${expected}" ]]; then
-    record_skipped "${label} revision ${actual} validated"
-  else
-    record_mismatch "${label} revision ${actual:-unknown}; validated ${expected}; existing tree preserved"
-  fi
-}
-check_git_revision 'RS control SDK' "${SDK_DIR}" "${SDK_REF}"
-check_git_revision 'RS MuJoCo source' "${MUJOCO_SOURCE_DIR}" "${MUJOCO_REF}"
+log 'Checking vendored RS third-party sources'
+if [[ -f "${SDK_DIR}/reBotArm_control_py/__init__.py" ]]; then
+  record_skipped "vendored RS control SDK present"
+else
+  record_failed "vendored RS control SDK missing: ${SDK_DIR}"
+fi
+if [[ -f "${MUJOCO_SOURCE_DIR}/assets/00_arm_rs_asm_v3/scene.xml" ]]; then
+  record_skipped "vendored RS MuJoCo source present"
+else
+  record_failed "vendored RS MuJoCo source missing: ${MUJOCO_SOURCE_DIR}"
+fi
+if find "${WS_DIR}/third_party" -mindepth 2 -maxdepth 2 -name .git -print -quit | grep -q .; then
+  record_failed 'nested Git metadata exists under rebotarm_ros2/third_party'
+else
+  record_skipped 'third-party sources are ordinary files in the main repository'
+fi
 
 log 'Checking rosdep database'
 if have rosdep && rosdep db >/dev/null 2>&1; then

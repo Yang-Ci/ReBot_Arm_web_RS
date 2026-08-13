@@ -98,21 +98,10 @@ ip -details link show can0
 Choose and install the appropriate ROS2 distribution from the
 [official ROS getting started guide](https://www.ros.org/blog/getting-started/).
 
-### Step 2. Clone the ROS2 workspace
+### Step 2. Use the integrated ROS2 workspace
 
-Preferred upstream repository:
-
-```bash
-git clone https://github.com/Seeed-Projects/reBotArmController_ROS2.git rebotarm_ros2
-cd rebotarm_ros2
-```
-
-Current development repository:
-
-```bash
-git clone https://github.com/EclipseaHime017/reBotArmController_ROS2.git rebotarm_ros2
-cd rebotarm_ros2
-```
+This directory is part of `ReBot_Arm_web_RS`. Clone the parent repository once,
+then enter `rebotarm_ros2`; no separate ROS repository is required.
 
 ### Step 3. Install motorbridge
 
@@ -122,12 +111,10 @@ Install `motorbridge` from the official PyPI index:
 python3 -m pip install --user --index-url https://pypi.org/simple motorbridge
 ```
 
-### Step 4. Clone the low-level SDK
+### Step 4. Use the vendored low-level SDK
 
-```bash
-mkdir -p third_party
-git clone https://github.com/vectorBH6/reBotArm_control_py.git third_party/reBotArm_control_py
-```
+`third_party/reBotArm_control_py` is already tracked by the parent repository as
+ordinary files. Do not create a nested Git repository there.
 
 ## Build
 
