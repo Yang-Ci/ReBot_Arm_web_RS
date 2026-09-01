@@ -13,13 +13,20 @@ export const STORAGE_ZONES = {
 };
 
 export const STACK_TARGETS = {
-  blue: { x: 0.32, y: 0.18, z: 0.119 },
-  red: { x: 0.32, y: 0.18, z: 0.1605 },
-  yellow: { x: 0.32, y: 0.18, z: 0.209 }
+  blue: { x: 0.30, y: 0.30, z: 0.119 },
+  red: { x: 0.30, y: 0.30, z: 0.1605 },
+  yellow: { x: 0.30, y: 0.30, z: 0.209 }
 };
 
 const OPEN_WIDTH = 0.046;
 const MOVE_TIMEOUT = 4.5;
+const PLACE_PRESS_DEPTH = 0.0005;
+const SUPPORT_SETTLE_TIME = 0.10;
+const TOWER_SETTLE_TIME = 0.35;
+const DROP_XY_TOLERANCE = 0.008;
+const MAX_PLACEMENT_SPEED = 0.035;
+const STACK_RETREAT_CLEARANCE = 0.12;
+const STACK_DEPART_OFFSET = { x: -0.05, y: -0.08 };
 const STAGE_PROGRESS = {
   idle: 0,
   homing: 0.02,
@@ -31,7 +38,9 @@ const STAGE_PROGRESS = {
   transfer: 0.76,
   place: 0.86,
   release: 0.94,
-  retreat: 0.98,
+  retreat: 0.97,
+  depart: 0.985,
+  settling: 0.99,
   complete: 1,
   failed: 1
 };
@@ -42,14 +51,20 @@ function distance(a, b) {
 
 export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onChange }) {
   const bodyType = mujoco.mjtObj.mjOBJ_BODY.value;
+  const tableBodyId = mujoco.mj_name2id(model, bodyType, 'task_table');
   const fingerBodies = new Set([
     mujoco.mj_name2id(model, bodyType, 'gripper_left'),
     mujoco.mj_name2id(model, bodyType, 'gripper_right')
   ]);
-  const targets = VISION_TARGETS.map((target) => ({
-    ...target,
-    bodyId: mujoco.mj_name2id(model, bodyType, target.body)
-  }));
+  const targets = VISION_TARGETS.map((target) => {
+    const bodyId = mujoco.mj_name2id(model, bodyType, target.body);
+    const jointAddress = model.body_jntadr[bodyId];
+    return {
+      ...target,
+      bodyId,
+      dofAddress: model.jnt_dofadr[jointAddress]
+    };
+  });
   if (targets.some((target) => target.bodyId < 0)) {
     throw new Error('抓取演示缺少颜色目标 body');
   }
@@ -66,6 +81,9 @@ export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onCh
   let mode = 'put-away';
   let stackQueue = [];
   let pendingStackId = null;
+  let expectedSupportBodyId = tableBodyId;
+  let carryOffset = null;
+  let supportContactSince = null;
   let lastError = 0;
   let message = '';
 
@@ -81,6 +99,11 @@ export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onCh
     };
   }
 
+  function selectedLinearSpeed() {
+    const start = selected().dofAddress;
+    return Math.hypot(data.qvel[start], data.qvel[start + 1], data.qvel[start + 2]);
+  }
+
   function snapshot() {
     return {
       running,
@@ -91,7 +114,8 @@ export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onCh
       message,
       mode,
       objectPosition: bodyPosition(selected().bodyId),
-      objectStart
+      objectStart,
+      carryOffset: carryOffset ? { ...carryOffset } : null
     };
   }
 
@@ -119,6 +143,14 @@ export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onCh
     mode = nextMode;
     objectStart = bodyPosition(selected().bodyId);
     dropTarget = nextDropTarget;
+    expectedSupportBodyId =
+      nextMode === 'stack' && nextId === 'red'
+        ? targets.find((target) => target.id === 'blue').bodyId
+        : nextMode === 'stack' && nextId === 'yellow'
+          ? targets.find((target) => target.id === 'red').bodyId
+          : tableBodyId;
+    carryOffset = null;
+    supportContactSince = null;
     ikAngles = Object.fromEntries(
       ARM_JOINTS.map((joint) => [joint.name, data.qpos[joints.byName[joint.name].qposadr]])
     );
@@ -154,6 +186,8 @@ export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onCh
     moveTarget = null;
     stackQueue = [];
     mode = 'put-away';
+    carryOffset = null;
+    supportContactSince = null;
     notify();
     return true;
   }
@@ -186,9 +220,10 @@ export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onCh
       if (!contact) continue;
       const body1 = model.geom_bodyid[contact.geom1];
       const body2 = model.geom_bodyid[contact.geom2];
-      const touchesSelected = body1 === selectedBodyId || body2 === selectedBodyId;
-      const otherIsFinger = fingerBodies.has(body1) || fingerBodies.has(body2);
-      if (touchesSelected && !otherIsFinger) return true;
+      if (
+        (body1 === selectedBodyId && body2 === expectedSupportBodyId) ||
+        (body2 === selectedBodyId && body1 === expectedSupportBodyId)
+      ) return true;
     }
     return false;
   }
@@ -211,7 +246,60 @@ export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onCh
     const object = bodyPosition(selected().bodyId);
     const horizontalError = Math.hypot(object.x - dropTarget.x, object.y - dropTarget.y);
     const verticalError = object.z - dropTarget.z;
-    return horizontalError < 0.035 && verticalError > -0.025 && verticalError < 0.045;
+    return horizontalError < DROP_XY_TOLERANCE && verticalError > -0.018 && verticalError < 0.030;
+  }
+
+  function rememberCarryOffset() {
+    const object = bodyPosition(selected().bodyId);
+    const tcp = ik.tcpPosition();
+    carryOffset = {
+      x: object.x - tcp.x,
+      y: object.y - tcp.y,
+      z: object.z - tcp.z
+    };
+  }
+
+  function gripAlignedDropTarget(z) {
+    const object = bodyPosition(selected().bodyId);
+    const tcp = ik.tcpPosition();
+    return {
+      x: tcp.x + dropTarget.x - object.x,
+      y: tcp.y + dropTarget.y - object.y,
+      z
+    };
+  }
+
+  function trackObjectOverDropTarget() {
+    const object = bodyPosition(selected().bodyId);
+    const tcp = ik.tcpPosition();
+    moveTarget.x = tcp.x + dropTarget.x - object.x;
+    moveTarget.y = tcp.y + dropTarget.y - object.y;
+  }
+
+  function verticalRetreatTarget() {
+    const tcp = ik.tcpPosition();
+    return {
+      x: tcp.x,
+      y: tcp.y,
+      z: dropTarget.z + (mode === 'stack' ? STACK_RETREAT_CLEARANCE : 0.11)
+    };
+  }
+
+  function finishPlacement() {
+    if (mode === 'stack' && stackQueue.length > 0) {
+      const nextId = stackQueue.shift();
+      pendingStackId = nextId;
+      stage = 'homing';
+      stageStartedAt = data.time;
+      moveTarget = null;
+      physics.setTargets(homePose(joints));
+      physics.setTarget('joint7', OPEN_WIDTH);
+      notify();
+    } else {
+      running = false;
+      message = mode === 'stack' ? 'stack-complete' : 'complete';
+      enter('complete');
+    }
   }
 
   function update() {
@@ -246,36 +334,54 @@ export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onCh
       if (moveStep(dt)) {
         const object = bodyPosition(selected().bodyId);
         if (object.z < objectStart.z + 0.035) fail('grasp-missed');
-        else enter('transfer', { x: dropTarget.x, y: dropTarget.y, z: objectStart.z + 0.13 });
+        else {
+          rememberCarryOffset();
+          enter('transfer', gripAlignedDropTarget(objectStart.z + 0.13));
+        }
       } else if (timedOut()) fail('lift-timeout');
     } else if (stage === 'transfer') {
-      if (moveStep(dt)) enter('place', { x: dropTarget.x, y: dropTarget.y, z: dropTarget.z + 0.006 });
+      if (moveStep(dt)) {
+        const offset = carryOffset || { z: -0.006 };
+        enter('place', gripAlignedDropTarget(dropTarget.z - offset.z - PLACE_PRESS_DEPTH));
+      }
       else if (timedOut()) fail('transfer-timeout');
     } else if (stage === 'place') {
-      const supported = elapsed > 0.15 && objectIsAtDropTarget() && objectHasSupportContact();
-      if (moveStep(dt) || supported) {
+      trackObjectOverDropTarget();
+      moveStep(dt);
+      const supported =
+        objectIsAtDropTarget() &&
+        objectHasSupportContact() &&
+        selectedLinearSpeed() < MAX_PLACEMENT_SPEED;
+      if (supported && supportContactSince === null) supportContactSince = now;
+      else if (!supported) supportContactSince = null;
+      if (supportContactSince !== null && now - supportContactSince >= SUPPORT_SETTLE_TIME) {
         physics.setTarget('joint7', OPEN_WIDTH);
         enter('release');
       } else if (timedOut()) fail('place-timeout');
     } else if (stage === 'release') {
-      if (elapsed > 0.65) enter('retreat', { x: dropTarget.x, y: dropTarget.y, z: dropTarget.z + 0.11 });
+      const width = data.qpos[joints.byName.joint7.qposadr];
+      const gripperIsClear = width > OPEN_WIDTH - 0.008;
+      if ((elapsed > 0.35 && gripperIsClear) || elapsed > 1.1) {
+        enter('retreat', verticalRetreatTarget());
+      }
     } else if (stage === 'retreat') {
       if (moveStep(dt)) {
-        if (mode === 'stack' && stackQueue.length > 0) {
-          const nextId = stackQueue.shift();
-          pendingStackId = nextId;
-          stage = 'homing';
-          stageStartedAt = data.time;
-          moveTarget = null;
-          physics.setTargets(homePose(joints));
-          physics.setTarget('joint7', OPEN_WIDTH);
-          notify();
-        } else {
-          running = false;
-          message = mode === 'stack' ? 'stack-complete' : 'complete';
-          enter('complete');
-        }
+        if (mode === 'stack') {
+          enter('depart', {
+            x: dropTarget.x + STACK_DEPART_OFFSET.x,
+            y: dropTarget.y + STACK_DEPART_OFFSET.y,
+            z: moveTarget.z
+          });
+        } else enter('settling');
       } else if (timedOut()) fail('retreat-timeout');
+    } else if (stage === 'depart') {
+      if (moveStep(dt)) enter('settling');
+      else if (timedOut()) fail('depart-timeout');
+    } else if (stage === 'settling') {
+      if (
+        (elapsed >= TOWER_SETTLE_TIME && selectedLinearSpeed() < MAX_PLACEMENT_SPEED * 0.5) ||
+        elapsed > 1.2
+      ) finishPlacement();
     }
     notify();
     return snapshot();
@@ -289,6 +395,9 @@ export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onCh
     objectStart = null;
     moveTarget = null;
     dropTarget = null;
+    expectedSupportBodyId = tableBodyId;
+    carryOffset = null;
+    supportContactSince = null;
     lastError = 0;
     message = '';
     notify();

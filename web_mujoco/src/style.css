@@ -602,9 +602,179 @@ h1 {
 }
 
 .grasp-controls,
+.object-controls,
 .telemetry-controls {
   display: grid;
   gap: 9px;
+}
+
+.object-controls {
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.object-controls.is-active {
+  border-color: rgba(55, 211, 235, 0.78);
+  box-shadow: inset 0 1px rgba(121, 220, 255, 0.08), 0 0 22px rgba(22, 177, 220, 0.10);
+}
+
+.object-controls .control-card-heading {
+  align-items: center;
+  margin-bottom: 0;
+}
+
+.object-heading-copy {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.object-mode-switch {
+  position: relative;
+  min-width: 78px;
+  padding: 4px 25px 4px 8px;
+  border-radius: 999px;
+  color: #7898a7;
+  font-size: 9px;
+  line-height: 1.2;
+}
+
+.object-mode-switch::after {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #526879;
+  content: '';
+  transform: translateY(-50%);
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+
+.object-mode-switch[aria-checked="true"] {
+  color: #9deeff;
+  border-color: rgba(49, 217, 245, 0.66);
+}
+
+.object-mode-switch[aria-checked="true"]::after {
+  background: #31d9f5;
+  box-shadow: 0 0 9px rgba(49, 217, 245, 0.7);
+}
+
+.object-gamepad {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  align-items: center;
+  gap: 11px;
+  padding: 8px;
+  border: 1px solid rgba(31, 103, 143, 0.46);
+  border-radius: 10px;
+  background: rgba(2, 14, 29, 0.68);
+}
+
+.object-dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 40px);
+  grid-template-rows: repeat(3, 40px);
+  gap: 4px;
+  width: max-content;
+  touch-action: none;
+  user-select: none;
+}
+
+.object-dpad button {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  padding: 0;
+  border-color: rgba(39, 125, 169, 0.68);
+  border-radius: 11px;
+  color: #9deeff;
+  background: linear-gradient(145deg, #0a2941, #041322);
+  box-shadow: inset 0 1px rgba(151, 232, 255, 0.10), 0 4px 8px rgba(0, 0, 0, 0.28);
+  font-size: 13px;
+  transition: transform 80ms ease, border-color 100ms ease, background 100ms ease;
+}
+
+.object-dpad button:hover:not(:disabled) {
+  border-color: #36d9ff;
+  background: linear-gradient(145deg, #0d3856, #061b2d);
+}
+
+.object-dpad button:active,
+.object-dpad button.is-held {
+  transform: translateY(1px) scale(0.96);
+  background: #0b3b59;
+  box-shadow: inset 0 2px 7px rgba(0, 0, 0, 0.35), 0 0 12px rgba(0, 194, 255, 0.16);
+}
+
+.dpad-up { grid-area: 1 / 2; }
+.dpad-left { grid-area: 2 / 1; }
+.dpad-center { grid-area: 2 / 2; }
+.dpad-right { grid-area: 2 / 3; }
+.dpad-down { grid-area: 3 / 2; }
+
+.dpad-center {
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(39, 125, 169, 0.38);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(22, 83, 116, 0.74), rgba(3, 17, 31, 0.94));
+}
+
+.dpad-center i {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--object-color, #ef5260);
+  box-shadow: 0 0 9px var(--object-color, #ef5260);
+}
+
+.object-position-readout {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.object-position-readout > span {
+  color: #6f91a1;
+  font-size: 8px;
+  letter-spacing: 0.04em;
+}
+
+.object-position-readout > div {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 4px;
+}
+
+.object-position-readout small {
+  color: #4fbcd4;
+  font: 700 9px/1.2 "SFMono-Regular", Consolas, monospace;
+}
+
+.object-position-readout strong {
+  color: #d8f7ff;
+  font: 700 11px/1.2 "SFMono-Regular", Consolas, monospace;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.object-position-readout p {
+  display: flex;
+  justify-content: space-between;
+  gap: 5px;
+  margin: 3px 0 0;
+  padding-top: 5px;
+  border-top: 1px solid rgba(55, 128, 165, 0.24);
+  color: #6f91a1;
+  font-size: 8px;
+}
+
+.object-position-readout b {
+  color: #83dfea;
+  font: 700 8px/1.2 "SFMono-Regular", Consolas, monospace;
 }
 
 .control-hint,

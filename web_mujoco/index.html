@@ -113,6 +113,37 @@
         </div>
         <p class="grasp-stage"><span data-i18n="grasp.stageLabel">阶段</span><strong id="grasp-stage" aria-live="polite" data-i18n="grasp.stage.idle">等待开始</strong></p>
       </section>
+      <section class="control-card object-controls" id="object-controls" aria-labelledby="object-controls-title">
+        <div class="control-card-heading">
+          <div class="object-heading-copy">
+            <h2 id="object-controls-title" data-i18n="object.title">物体移动</h2>
+            <span class="feature-badge">MANUAL</span>
+          </div>
+          <button type="button" id="toggle-object-control" class="object-mode-switch"
+                  role="switch" aria-checked="false" data-i18n="object.enable">启用移动</button>
+        </div>
+        <p class="control-hint" data-i18n="object.hint">选择物体后，用方向键在桌面上移动；也支持键盘方向键或 WASD。</p>
+        <div class="vision-targets object-targets" id="object-targets" role="group" data-i18n-aria-label="object.targetAria">
+          <button type="button" class="vision-target active" data-object-target="red" aria-pressed="true"><i class="target-red"></i><span data-i18n="vision.red">红色方块</span></button>
+          <button type="button" class="vision-target" data-object-target="blue" aria-pressed="false"><i class="target-blue"></i><span data-i18n="vision.blue">蓝色方块</span></button>
+          <button type="button" class="vision-target" data-object-target="yellow" aria-pressed="false"><i class="target-yellow"></i><span data-i18n="vision.yellow">黄色圆柱</span></button>
+        </div>
+        <div class="object-gamepad">
+          <div class="object-dpad" id="object-dpad" role="group" data-i18n-aria-label="object.dpadAria">
+            <button type="button" class="dpad-up" data-object-direction="up" data-i18n-aria-label="object.up">▲</button>
+            <button type="button" class="dpad-left" data-object-direction="left" data-i18n-aria-label="object.left">◀</button>
+            <span class="dpad-center" id="object-dpad-center" aria-hidden="true"><i></i></span>
+            <button type="button" class="dpad-right" data-object-direction="right" data-i18n-aria-label="object.right">▶</button>
+            <button type="button" class="dpad-down" data-object-direction="down" data-i18n-aria-label="object.down">▼</button>
+          </div>
+          <div class="object-position-readout" aria-live="polite">
+            <span data-i18n="object.position">桌面坐标</span>
+            <div><small>X</small><strong id="object-position-x">—</strong></div>
+            <div><small>Y</small><strong id="object-position-y">—</strong></div>
+            <p><span data-i18n="object.step">每格</span><b>15 mm</b></p>
+          </div>
+        </div>
+      </section>
       <section class="control-card telemetry-controls" id="telemetry-controls" aria-labelledby="telemetry-title">
         <div class="control-card-heading">
           <h2 id="telemetry-title" data-i18n="telemetry.title">接触与受力</h2>

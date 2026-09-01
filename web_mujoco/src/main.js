@@ -9,6 +9,7 @@ import { createPartExplorer } from './part-explorer.js';
 import { createGraspDemo } from './grasp-demo.js';
 import { createContactTelemetry } from './contact-telemetry.js';
 import { createTelemetryPanel } from './telemetry-panel.js';
+import { OBJECT_MOVE_STEP, createObjectPositionController } from './object-position-control.js';
 import { t, bindLangSwitch, applyStaticI18n, onLangChange } from './i18n.js';
 import { persistAppShell } from './register-service-worker.js';
 
@@ -41,6 +42,13 @@ const cancelGraspEl = document.getElementById('cancel-grasp');
 const graspProgressEl = document.getElementById('grasp-progress');
 const graspProgressValueEl = document.getElementById('grasp-progress-value');
 const graspStageEl = document.getElementById('grasp-stage');
+const objectControlsEl = document.getElementById('object-controls');
+const toggleObjectControlEl = document.getElementById('toggle-object-control');
+const objectTargetsEl = document.getElementById('object-targets');
+const objectDpadEl = document.getElementById('object-dpad');
+const objectDpadCenterEl = document.getElementById('object-dpad-center');
+const objectPositionXEl = document.getElementById('object-position-x');
+const objectPositionYEl = document.getElementById('object-position-y');
 const telemetryControlsEl = document.getElementById('telemetry-controls');
 const toggleContactVisualsEl = document.getElementById('toggle-contact-visuals');
 const dragMarkerEl = document.getElementById('drag-marker');
@@ -180,6 +188,7 @@ let panel = null;
 let tcpDrag = null;
 let partExplorer = null;
 let graspDemo = null;
+let objectPositionController = null;
 let telemetryPanel = null;
 let readyCount = null;
 let guidesVisible = false;
@@ -195,6 +204,12 @@ let wristCameraCollapsed = false;
 let selectedVisionTarget = 'red';
 let contactVisualsEnabled = true;
 let graspState = { running: false, stage: 'idle', progress: 0, message: '' };
+let objectControlState = {
+  enabled: false,
+  selectedId: 'red',
+  position: { x: 0.24, y: -0.30, z: 0.1225 },
+  lastResult: null
+};
 let explosionState = { progress: 0, direction: 0, stageKey: 'assembled' };
 
 function renderGuidesToggle() {
@@ -250,16 +265,39 @@ function renderGraspControls() {
     button.setAttribute('aria-pressed', String(active));
     button.disabled = graspState.running;
   });
-  if (startGraspEl) startGraspEl.disabled = graspState.running || explosionState.progress > 0;
-  if (startStackEl) startStackEl.disabled = graspState.running || explosionState.progress > 0;
+  if (startGraspEl) startGraspEl.disabled = graspState.running || objectControlState.enabled || explosionState.progress > 0;
+  if (startStackEl) startStackEl.disabled = graspState.running || objectControlState.enabled || explosionState.progress > 0;
   if (cancelGraspEl) cancelGraspEl.disabled = !graspState.running;
   if (graspProgressEl) graspProgressEl.value = graspState.progress || 0;
   if (graspProgressValueEl) graspProgressValueEl.textContent = `${Math.round((graspState.progress || 0) * 100)}%`;
   if (graspStageEl) graspStageEl.textContent = t(`grasp.stage.${graspState.stage}`);
   document.body.classList.toggle('grasp-running', graspState.running);
-  if (toggleDragEl) toggleDragEl.disabled = graspState.running;
-  if (gripperOpenEl) gripperOpenEl.disabled = graspState.running;
-  if (gripperCloseEl) gripperCloseEl.disabled = graspState.running;
+  if (toggleDragEl) toggleDragEl.disabled = graspState.running || objectControlState.enabled;
+  if (gripperOpenEl) gripperOpenEl.disabled = graspState.running || objectControlState.enabled;
+  if (gripperCloseEl) gripperCloseEl.disabled = graspState.running || objectControlState.enabled;
+}
+
+function renderObjectControls() {
+  const locked = graspState.running || explosionState.progress > 0;
+  objectControlsEl?.classList.toggle('is-active', objectControlState.enabled);
+  objectTargetsEl?.querySelectorAll('[data-object-target]').forEach((button) => {
+    const active = button.dataset.objectTarget === objectControlState.selectedId;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+    button.disabled = locked;
+  });
+  if (toggleObjectControlEl) {
+    toggleObjectControlEl.textContent = t(objectControlState.enabled ? 'object.disable' : 'object.enable');
+    toggleObjectControlEl.setAttribute('aria-checked', String(objectControlState.enabled));
+    toggleObjectControlEl.disabled = locked;
+  }
+  objectDpadEl?.querySelectorAll('[data-object-direction]').forEach((button) => {
+    button.disabled = !objectControlState.enabled || locked;
+  });
+  const colors = { red: '#ef5260', blue: '#45aef2', yellow: '#e6d957' };
+  objectDpadCenterEl?.style.setProperty('--object-color', colors[objectControlState.selectedId] || colors.red);
+  if (objectPositionXEl) objectPositionXEl.textContent = `${Math.round(objectControlState.position.x * 1000)} mm`;
+  if (objectPositionYEl) objectPositionYEl.textContent = `${Math.round(objectControlState.position.y * 1000)} mm`;
 }
 
 function renderContactVisualsToggle() {
@@ -275,7 +313,8 @@ function renderExplosionControls() {
   explosionProgressValueEl.textContent = `${percent}%`;
   explosionProgressEl.setAttribute('aria-valuenow', String(percent));
   explosionStageEl.textContent = t(`timeline.stage.${explosionState.stageKey}`);
-  toggleExplosionEl.disabled = graspState.running || (explosionState.progress >= 1 && explosionState.direction === 0);
+  toggleExplosionEl.disabled = graspState.running || objectControlState.enabled || (explosionState.progress >= 1 && explosionState.direction === 0);
+  explosionProgressEl.disabled = graspState.running || objectControlState.enabled;
   pauseExplosionEl.disabled = explosionState.direction === 0;
   reverseExplosionEl.disabled = explosionState.progress <= 0 && explosionState.direction === 0;
   toggleExplosionEl.classList.toggle('active', explosionState.direction > 0);
@@ -295,6 +334,7 @@ onLangChange(() => {
   renderCameraModelToggle();
   renderCameraLayout();
   renderGraspControls();
+  renderObjectControls();
   renderContactVisualsToggle();
   renderExplosionControls();
   if (!loadingComplete) {
@@ -307,6 +347,8 @@ onLangChange(() => {
     setStatus(t('status.exploded'));
   } else if (explosionState.progress > 0) {
     setStatus(t('status.explosionPaused', { percent: Math.round(explosionState.progress * 100) }));
+  } else if (objectControlState.enabled) {
+    setStatus(t('status.objectModeOn'));
   } else if (!tcpDrag?.isEnabled() && readyCount != null) {
     setStatus(t('status.ready', { n: readyCount }));
   }
@@ -323,6 +365,19 @@ async function main() {
   const physics = createPhysicsController(mujoco, model, data, joints);
   const ik = createTcpIk(mujoco, model, data, joints);
   const contactTelemetry = createContactTelemetry(mujoco, model, data);
+
+  objectPositionController = createObjectPositionController({
+    mujoco,
+    model,
+    data,
+    onChange: (state) => {
+      objectControlState = state;
+      renderObjectControls();
+      renderGraspControls();
+      renderExplosionControls();
+    }
+  });
+  objectControlState = objectPositionController.state();
 
   setLoadProgress({ key: 'status.compiled', vars: { ngeom: model.ngeom } });
   view.build(mujoco, model, materialProps);
@@ -391,7 +446,11 @@ async function main() {
     onChange: (state) => {
       graspState = state;
       selectedVisionTarget = state.selectedId;
+      if (objectControlState.selectedId !== state.selectedId) {
+        objectPositionController.setSelected(state.selectedId);
+      }
       renderGraspControls();
+      renderObjectControls();
       renderExplosionControls();
       if (state.stage !== previousGraspStage) {
         previousGraspStage = state.stage;
@@ -409,16 +468,103 @@ async function main() {
     if (!button || graspState.running) return;
     selectedVisionTarget = button.dataset.target;
     graspDemo.setSelected(selectedVisionTarget);
+    objectPositionController.setSelected(selectedVisionTarget);
     renderGraspControls();
   });
-  startGraspEl?.addEventListener('click', () => {
+  objectTargetsEl?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-object-target]');
+    if (!button || graspState.running || explosionState.progress > 0) return;
+    const next = button.dataset.objectTarget;
+    selectedVisionTarget = next;
+    objectPositionController.setSelected(next);
+    graspDemo.setSelected(next);
+    renderObjectControls();
+  });
+
+  function reportObjectMove(result) {
+    if (result.ok) {
+      const position = result.position;
+      setStatus(t('status.objectMoved', {
+        name: t(`vision.${objectControlState.selectedId}`),
+        x: Math.round(position.x * 1000),
+        y: Math.round(position.y * 1000)
+      }));
+    } else if (result.reason === 'boundary') setStatus(t('status.objectBoundary'));
+    else if (result.reason === 'overlap') setStatus(t('status.objectOverlap'));
+  }
+
+  const objectDirections = {
+    up: [0, OBJECT_MOVE_STEP],
+    down: [0, -OBJECT_MOVE_STEP],
+    left: [-OBJECT_MOVE_STEP, 0],
+    right: [OBJECT_MOVE_STEP, 0]
+  };
+
+  function moveObject(direction) {
+    const delta = objectDirections[direction];
+    if (!delta || !objectPositionController.isEnabled()) return;
+    reportObjectMove(objectPositionController.move(delta[0], delta[1]));
+  }
+
+  toggleObjectControlEl?.addEventListener('click', () => {
     if (graspState.running || explosionState.progress > 0) return;
+    const enable = !objectPositionController.isEnabled();
+    if (enable && tcpDrag?.isEnabled()) tcpDrag.setEnabled(false);
+    if (enable) view.clearPartSelection();
+    objectPositionController.setEnabled(enable);
+    setStatus(t(enable ? 'status.objectModeOn' : 'status.objectModeOff'));
+  });
+
+  let objectHoldDelay = 0;
+  let objectHoldRepeat = 0;
+  function stopObjectHold() {
+    window.clearTimeout(objectHoldDelay);
+    window.clearInterval(objectHoldRepeat);
+    objectHoldDelay = 0;
+    objectHoldRepeat = 0;
+    objectDpadEl?.querySelectorAll('.is-held').forEach((button) => button.classList.remove('is-held'));
+  }
+  objectDpadEl?.querySelectorAll('[data-object-direction]').forEach((button) => {
+    button.addEventListener('pointerdown', (event) => {
+      if (button.disabled) return;
+      event.preventDefault();
+      stopObjectHold();
+      button.classList.add('is-held');
+      button.setPointerCapture?.(event.pointerId);
+      moveObject(button.dataset.objectDirection);
+      objectHoldDelay = window.setTimeout(() => {
+        objectHoldRepeat = window.setInterval(() => moveObject(button.dataset.objectDirection), 90);
+      }, 260);
+    });
+    button.addEventListener('pointerup', stopObjectHold);
+    button.addEventListener('pointercancel', stopObjectHold);
+    button.addEventListener('lostpointercapture', stopObjectHold);
+    button.addEventListener('click', (event) => {
+      if (event.detail === 0 && !button.disabled) moveObject(button.dataset.objectDirection);
+    });
+  });
+  window.addEventListener('blur', stopObjectHold);
+  window.addEventListener('keydown', (event) => {
+    if (!objectPositionController.isEnabled()) return;
+    if (event.target.closest?.('input, select, textarea, button, [contenteditable="true"]')) return;
+    const direction = {
+      ArrowUp: 'up', KeyW: 'up',
+      ArrowDown: 'down', KeyS: 'down',
+      ArrowLeft: 'left', KeyA: 'left',
+      ArrowRight: 'right', KeyD: 'right'
+    }[event.code];
+    if (!direction) return;
+    event.preventDefault();
+    moveObject(direction);
+  });
+  startGraspEl?.addEventListener('click', () => {
+    if (graspState.running || objectControlState.enabled || explosionState.progress > 0) return;
     if (tcpDrag?.isEnabled()) tcpDrag.setEnabled(false);
     view.clearPartSelection();
     graspDemo.start(selectedVisionTarget);
   });
   startStackEl?.addEventListener('click', () => {
-    if (graspState.running || explosionState.progress > 0) return;
+    if (graspState.running || objectControlState.enabled || explosionState.progress > 0) return;
     if (tcpDrag?.isEnabled()) tcpDrag.setEnabled(false);
     view.clearPartSelection();
     graspDemo.startStack();
@@ -432,8 +578,10 @@ async function main() {
     renderContactVisualsToggle();
   });
   renderGraspControls();
+  renderObjectControls();
   renderContactVisualsToggle();
   toggleExplosionEl?.addEventListener('click', () => {
+    if (objectControlState.enabled) return;
     if (cameraViewsVisible) setCameraViewsVisible(false);
     if (tcpDrag?.isEnabled()) tcpDrag.setEnabled(false);
     view.playExplosion(1);
@@ -452,6 +600,7 @@ async function main() {
   });
   explosionProgressEl?.addEventListener('pointerdown', (event) => event.stopPropagation());
   explosionProgressEl?.addEventListener('input', () => {
+    if (objectControlState.enabled) return;
     const progress = Number(explosionProgressEl.value) / 100;
     if (progress > 0 && tcpDrag?.isEnabled()) tcpDrag.setEnabled(false);
     if (progress > 0 && cameraViewsVisible) setCameraViewsVisible(false);
@@ -501,6 +650,7 @@ async function main() {
     view.clearPartSelection();
     renderExplosionControls();
     physics.reset();
+    objectPositionController.reset();
     Object.entries(physics.targets).forEach(([name, amount]) => {
       panel.setTarget(name, amount);
       panel.setActual(name, amount);
@@ -525,6 +675,8 @@ async function main() {
     tcpDrag.update(performance.now());
     const now = performance.now();
     if (now - lastTelemetryAt >= 80) {
+      objectControlState = objectPositionController.state();
+      renderObjectControls();
       const contacts = contactTelemetry.sample(selectedVisionTarget);
       view.setContactVisuals(contacts.contacts, contactVisualsEnabled);
       telemetryPanel.update(physics.telemetry(), contacts);

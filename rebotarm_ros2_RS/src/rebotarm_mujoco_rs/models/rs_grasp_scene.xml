@@ -84,7 +84,10 @@
             solref="0.002 1" solimp="0.99 0.995 0.0005"/>
     </body>
 
-    <body name="blue_block" pos="0.26 0.02 0.119">
+    <!-- Keep the blue block clear of the folded-arm singular region near the
+         home TCP.  This offset gives the fingers a straighter top-down path
+         while preserving separation from the stack and storage zones. -->
+    <body name="blue_block" pos="0.34 0.06 0.119">
       <freejoint name="blue_block_freejoint"/>
       <geom name="blue_block_geom" type="box" size="0.026 0.016 0.019"
             material="rs_blue" mass="0.050" friction="3.5 0.08 0.01"

@@ -6,9 +6,11 @@ import { ARM_JOINTS, bindJoints } from '../src/kinematics.js';
 import { createPhysicsController } from '../src/pd-control.js';
 import { createTcpIk } from '../src/tcp-ik.js';
 import { createGraspDemo, STORAGE_ZONES, STACK_TARGETS } from '../src/grasp-demo.js';
+import { OBJECT_MOVE_STEP, createObjectPositionController } from '../src/object-position-control.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const modelsDir = path.resolve(here, '../../rebotarm_ros2_RS/src/rebotarm_mujoco_rs/models');
+const graspPhysicsSteps = Number.parseInt(process.env.GRASP_PHYSICS_STEPS || '12', 10);
 
 function namedId(mujoco, model, type, name) {
   const id = mujoco.mj_name2id(model, type, name);
@@ -19,6 +21,11 @@ function namedId(mujoco, model, type, name) {
 function bodyPos(mujoco, model, data, name) {
   const id = namedId(mujoco, model, mujoco.mjtObj.mjOBJ_BODY.value, name);
   return [data.xpos[id * 3], data.xpos[id * 3 + 1], data.xpos[id * 3 + 2]];
+}
+
+function bodyUpZ(mujoco, model, data, name) {
+  const id = namedId(mujoco, model, mujoco.mjtObj.mjOBJ_BODY.value, name);
+  return data.xmat[id * 9 + 8];
 }
 
 function meshExtent(model, meshId) {
@@ -67,6 +74,10 @@ async function loadScene(mujoco) {
 }
 
 async function main() {
+  assert(
+    Number.isInteger(graspPhysicsSteps) && graspPhysicsSteps >= 4 && graspPhysicsSteps <= 24,
+    `GRASP_PHYSICS_STEPS 超出测试范围：${graspPhysicsSteps}`
+  );
   const mujoco = await loadMujoco();
   const { model, data, vfs } = await loadScene(mujoco);
   const joints = bindJoints(mujoco, model);
@@ -150,6 +161,48 @@ async function main() {
     blue: bodyPos(mujoco, model, data, 'blue_block'),
     yellow: bodyPos(mujoco, model, data, 'yellow_cylinder')
   };
+  assert(
+    Math.abs(initialPositions.blue[0] - 0.34) < 0.002 &&
+      Math.abs(initialPositions.blue[1] - 0.06) < 0.002,
+    `蓝色块应位于便于俯抓的中前工作区：${initialPositions.blue.join(',')}`
+  );
+  const objectPositionController = createObjectPositionController({ mujoco, model, data });
+  assert(
+    objectPositionController.move(OBJECT_MOVE_STEP, 0).reason === 'disabled',
+    '物体移动模式关闭时不应修改物体位置'
+  );
+  objectPositionController.setEnabled(true);
+  const objectMoveResults = {};
+  for (const [id, dx, dy] of [
+    ['red', OBJECT_MOVE_STEP, 0],
+    ['blue', 0, OBJECT_MOVE_STEP],
+    ['yellow', -OBJECT_MOVE_STEP, 0]
+  ]) {
+    objectPositionController.setSelected(id);
+    const before = objectPositionController.state().position;
+    const result = objectPositionController.move(dx, dy);
+    assert(result.ok, `${id} 方向键移动失败：${JSON.stringify(result)}`);
+    assert(
+      Math.abs(result.position.x - before.x - dx) < 0.001 &&
+        Math.abs(result.position.y - before.y - dy) < 0.001,
+      `${id} 方向键步长错误：${JSON.stringify(result.position)}`
+    );
+    objectMoveResults[id] = result.position;
+  }
+  objectPositionController.setSelected('red');
+  const redPosition = objectPositionController.state().position;
+  const yellowPosition = objectMoveResults.yellow;
+  const overlapResult = objectPositionController.move(
+    yellowPosition.x - redPosition.x,
+    yellowPosition.y - redPosition.y
+  );
+  assert(overlapResult.reason === 'overlap', '物体移动应阻止两个物体重叠');
+  objectPositionController.setSelected('blue');
+  const boundaryResult = objectPositionController.move(10, 0);
+  assert(boundaryResult.ok && boundaryResult.clamped, '物体移动应限制在桌面安全边界内');
+  assert(boundaryResult.position.x < 0.61, `蓝色块越过桌面边界：${boundaryResult.position.x}`);
+  objectPositionController.reset();
+  physics.reset();
   Object.entries(STORAGE_ZONES).forEach(([id, zone]) => {
     const initial = initialPositions[id];
     assert(
@@ -227,7 +280,7 @@ async function main() {
     graspDemo.start(target);
     for (let frame = 0; frame < 3200 && graspDemo.isRunning(); frame += 1) {
       graspDemo.update();
-      physics.step(12);
+      physics.step(graspPhysicsSteps);
     }
     graspState = graspDemo.state();
     const finalPosition = bodyPos(mujoco, model, data, body);
@@ -246,20 +299,33 @@ async function main() {
         Math.abs(finalPosition[1]) < 0.45,
       `${target} 放置后超出桌面：${finalPosition.join(',')}`
     );
-    graspResults[target] = { stage: graspState.stage, position: finalPosition };
+    graspResults[target] = {
+      stage: graspState.stage,
+      position: finalPosition,
+      carryOffset: graspState.carryOffset
+    };
   }
 
   physics.reset();
+  const stackOffsets = {};
   const stackDemo = createGraspDemo({
     mujoco, model, data, joints, physics, ik,
-    onChange: () => {}
+    onChange: (state) => {
+      if (state.carryOffset) stackOffsets[state.selectedId] = state.carryOffset;
+    }
   });
   stackDemo.startStack();
   for (let frame = 0; frame < 12000 && stackDemo.isRunning(); frame += 1) {
     stackDemo.update();
-    physics.step(12);
+    physics.step(graspPhysicsSteps);
   }
   const stackState = stackDemo.state();
+  const stackAtCompletion = {
+    blue: bodyPos(mujoco, model, data, 'blue_block'),
+    red: bodyPos(mujoco, model, data, 'red_cube'),
+    yellow: bodyPos(mujoco, model, data, 'yellow_cylinder')
+  };
+  physics.step(1000);
   const stackedBlue = bodyPos(mujoco, model, data, 'blue_block');
   const stackedRed = bodyPos(mujoco, model, data, 'red_cube');
   const stackedYellow = bodyPos(mujoco, model, data, 'yellow_cylinder');
@@ -280,10 +346,102 @@ async function main() {
     stackedBlue[2] < stackedRed[2] && stackedRed[2] < stackedYellow[2],
     `叠叠乐顺序错误：blue=${stackedBlue[2]}, red=${stackedRed[2]}, yellow=${stackedYellow[2]}`
   );
+  const adjacentOffsets = [
+    Math.hypot(stackedBlue[0] - stackedRed[0], stackedBlue[1] - stackedRed[1]),
+    Math.hypot(stackedRed[0] - stackedYellow[0], stackedRed[1] - stackedYellow[1])
+  ];
+  assert(
+    adjacentOffsets.every((offset) => offset < 0.008),
+    `叠放层中心偏差过大：${adjacentOffsets.join(',')}`
+  );
+  const settleDrift = Math.max(
+    ...Object.entries(stackAtCompletion).map(([id, position]) => {
+      const settled = { blue: stackedBlue, red: stackedRed, yellow: stackedYellow }[id];
+      return Math.hypot(...settled.map((value, axis) => value - position[axis]));
+    })
+  );
+  assert(settleDrift < 0.003, `叠叠乐完成后仍在明显移动：${settleDrift}`);
+  const upright = [
+    bodyUpZ(mujoco, model, data, 'blue_block'),
+    bodyUpZ(mujoco, model, data, 'red_cube'),
+    bodyUpZ(mujoco, model, data, 'yellow_cylinder')
+  ];
+  assert(upright.every((upZ) => upZ > 0.995), `叠叠乐存在明显倾斜：${upright.join(',')}`);
+
+  // Reproduce the UI workflow that used to knock the finished tower over:
+  // put all objects into their zones first, then run the stack demo without a reset.
+  physics.reset();
+  const storedThenStackedDemo = createGraspDemo({
+    mujoco, model, data, joints, physics, ik,
+    onChange: () => {}
+  });
+  for (const target of ['red', 'blue', 'yellow']) {
+    storedThenStackedDemo.start(target);
+    for (let frame = 0; frame < 4000 && storedThenStackedDemo.isRunning(); frame += 1) {
+      storedThenStackedDemo.update();
+      physics.step(graspPhysicsSteps);
+    }
+    const storedState = storedThenStackedDemo.state();
+    assert(
+      storedState.stage === 'complete',
+      `收纳后叠放场景的 ${target} 收纳失败：${storedState.stage}/${storedState.message}`
+    );
+  }
+  storedThenStackedDemo.startStack();
+  for (let frame = 0; frame < 14000 && storedThenStackedDemo.isRunning(); frame += 1) {
+    storedThenStackedDemo.update();
+    physics.step(graspPhysicsSteps);
+  }
+  const storedThenStackedState = storedThenStackedDemo.state();
+  assert(
+    storedThenStackedState.stage === 'complete',
+    `先收纳再叠放未完成：${storedThenStackedState.stage}/${storedThenStackedState.message}`
+  );
+  const storedStackAtCompletion = {
+    blue: bodyPos(mujoco, model, data, 'blue_block'),
+    red: bodyPos(mujoco, model, data, 'red_cube'),
+    yellow: bodyPos(mujoco, model, data, 'yellow_cylinder')
+  };
+  physics.step(1000);
+  const storedStackSettled = {
+    blue: bodyPos(mujoco, model, data, 'blue_block'),
+    red: bodyPos(mujoco, model, data, 'red_cube'),
+    yellow: bodyPos(mujoco, model, data, 'yellow_cylinder')
+  };
+  const storedStackOffsets = [
+    Math.hypot(
+      storedStackSettled.blue[0] - storedStackSettled.red[0],
+      storedStackSettled.blue[1] - storedStackSettled.red[1]
+    ),
+    Math.hypot(
+      storedStackSettled.red[0] - storedStackSettled.yellow[0],
+      storedStackSettled.red[1] - storedStackSettled.yellow[1]
+    )
+  ];
+  const storedStackDrift = Math.max(
+    ...Object.keys(storedStackAtCompletion).map((id) => Math.hypot(
+      ...storedStackSettled[id].map((value, axis) => value - storedStackAtCompletion[id][axis])
+    ))
+  );
+  const storedStackUpright = [
+    bodyUpZ(mujoco, model, data, 'blue_block'),
+    bodyUpZ(mujoco, model, data, 'red_cube'),
+    bodyUpZ(mujoco, model, data, 'yellow_cylinder')
+  ];
+  assert(
+    storedStackOffsets.every((offset) => offset < 0.010),
+    `先收纳再叠放的层中心偏差过大：${storedStackOffsets.join(',')}`
+  );
+  assert(storedStackDrift < 0.003, `机械臂撤离后叠塔仍在移动：${storedStackDrift}`);
+  assert(
+    storedStackUpright.every((upZ) => upZ > 0.995),
+    `机械臂撤离后叠塔被碰斜：${storedStackUpright.join(',')}`
+  );
 
   console.log(JSON.stringify({
     ngeom: model.ngeom,
     ncam: model.ncam,
+    graspPhysicsSteps,
     wristCameraPosition,
     wristCameraTravel,
     d405MountExtent: mountExtent,
@@ -298,12 +456,30 @@ async function main() {
     joint2: { afterOne, afterHold },
     gripper,
     cube: { settledZ: cubeSettled[2], reset: cubeReset },
+    objectPositionControl: {
+      moved: objectMoveResults,
+      overlapProtected: overlapResult.reason === 'overlap',
+      boundaryX: boundaryResult.position.x
+    },
     graspDemo: graspResults,
     stackDemo: {
       stage: stackState.stage,
       blue: stackedBlue,
       red: stackedRed,
-      yellow: stackedYellow
+      yellow: stackedYellow,
+      carryOffsets: stackOffsets,
+      adjacentOffsets,
+      settleDrift,
+      upright
+    },
+    storedThenStackedDemo: {
+      stage: storedThenStackedState.stage,
+      blue: storedStackSettled.blue,
+      red: storedStackSettled.red,
+      yellow: storedStackSettled.yellow,
+      adjacentOffsets: storedStackOffsets,
+      settleDrift: storedStackDrift,
+      upright: storedStackUpright
     }
   }, null, 2));
 
