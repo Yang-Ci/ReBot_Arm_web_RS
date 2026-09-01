@@ -16,10 +16,12 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from moveit_configs_utils import MoveItConfigsBuilder
 
-moveit_parameters = SourceFileLoader(
+moveit_launch_common = SourceFileLoader(
     "moveit_launch_common",
     os.path.join(os.path.dirname(__file__), "moveit_launch_common.py"),
-).load_module().moveit_parameters
+).load_module()
+apply_rviz_urdf_compat = moveit_launch_common.apply_rviz_urdf_compat
+moveit_parameters = moveit_launch_common.moveit_parameters
 
 
 def _default_model():
@@ -88,6 +90,7 @@ def _launch_setup(context, *args, **kwargs):
         .planning_pipelines(pipelines=["ompl"])
         .to_moveit_configs()
     )
+    apply_rviz_urdf_compat(moveit_config)
     moveit_params = moveit_parameters(moveit_config)
 
     move_group_node = Node(
