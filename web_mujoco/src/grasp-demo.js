@@ -15,7 +15,7 @@ export const STORAGE_ZONES = {
 export const STACK_TARGETS = {
   blue: { x: 0.30, y: 0.30, z: 0.119 },
   red: { x: 0.30, y: 0.30, z: 0.1605 },
-  yellow: { x: 0.30, y: 0.30, z: 0.209 }
+  yellow: { x: 0.30, y: 0.294, z: 0.209 }
 };
 
 const OPEN_WIDTH = 0.046;
@@ -23,13 +23,40 @@ const MOVE_TIMEOUT = 4.5;
 const PLACE_PRESS_DEPTH = 0.0005;
 const SUPPORT_SETTLE_TIME = 0.10;
 const TOWER_SETTLE_TIME = 0.35;
-const DROP_XY_TOLERANCE = 0.008;
+const DROP_XY_TOLERANCE = 0.006;
 const MAX_PLACEMENT_SPEED = 0.035;
 const STACK_RETREAT_CLEARANCE = 0.12;
 const STACK_DEPART_OFFSET = { x: -0.05, y: -0.08 };
+const STACK_READY_POSE = {
+  joint1: 0,
+  joint2: 0.5515,
+  joint3: 0.2688,
+  joint4: 0.3229,
+  joint5: 0.0471,
+  joint6: 0
+};
+const CAMERA_FACING_POSE = {
+  ...STACK_READY_POSE,
+  joint4: 0.80
+};
+const REACTION_CENTER_TIMEOUT = 1.8;
+const REACTION_JOINT_TOLERANCE = 0.07;
+const STACK_CENTER_TIMEOUT = 1.4;
+const HAPPY_REACTION = [
+  { hold: 0.48, timeout: 1.00, offset: { joint6: -0.55 } },
+  { hold: 0.48, timeout: 1.00, offset: { joint6: 0.55 } },
+  { hold: 0.35, timeout: 0.85, offset: {} },
+  { hold: 0.65, timeout: 1.15, offset: { joint5: 0.36 } },
+  { hold: 0.48, timeout: 1.00, offset: {} }
+];
+const SHY_REACTION = [
+  { hold: 0.75, timeout: 1.25, offset: { joint2: -0.10, joint3: 0.06, joint5: 0.34 } },
+  { hold: 0.75, timeout: 1.25, offset: { joint2: -0.14, joint3: 0.10, joint5: 0.48 } },
+  { hold: 0.50, timeout: 1.00, offset: {} }
+];
 const STAGE_PROGRESS = {
   idle: 0,
-  homing: 0.02,
+  centering: 0.04,
   opening: 0.08,
   approach: 0.22,
   descend: 0.38,
@@ -41,6 +68,10 @@ const STAGE_PROGRESS = {
   retreat: 0.97,
   depart: 0.985,
   settling: 0.99,
+  'celebrate-centering': 0.992,
+  celebrate: 0.996,
+  'shy-centering': 0.992,
+  shy: 0.996,
   complete: 1,
   failed: 1
 };
@@ -49,7 +80,16 @@ function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 }
 
-export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onChange }) {
+export function createGraspDemo({
+  mujoco,
+  model,
+  data,
+  joints,
+  physics,
+  ik,
+  getObserverPosition,
+  onChange
+}) {
   const bodyType = mujoco.mjtObj.mjOBJ_BODY.value;
   const tableBodyId = mujoco.mj_name2id(model, bodyType, 'task_table');
   const fingerBodies = new Set([
@@ -84,6 +124,11 @@ export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onCh
   let expectedSupportBodyId = tableBodyId;
   let carryOffset = null;
   let supportContactSince = null;
+  let reaction = null;
+  let reactionSequence = [];
+  let reactionStep = -1;
+  let reactionCenterPose = null;
+  let pendingFailureReason = '';
   let lastError = 0;
   let message = '';
 
@@ -115,7 +160,10 @@ export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onCh
       mode,
       objectPosition: bodyPosition(selected().bodyId),
       objectStart,
-      carryOffset: carryOffset ? { ...carryOffset } : null
+      carryOffset: carryOffset ? { ...carryOffset } : null,
+      reaction,
+      reactionStep,
+      reactionCenterPose: reactionCenterPose ? { ...reactionCenterPose } : null
     };
   }
 
@@ -140,6 +188,7 @@ export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onCh
 
   function begin(nextId, nextDropTarget, nextMode = 'put-away') {
     selectedId = nextId;
+    pendingStackId = null;
     mode = nextMode;
     objectStart = bodyPosition(selected().bodyId);
     dropTarget = nextDropTarget;
@@ -151,6 +200,11 @@ export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onCh
           : tableBodyId;
     carryOffset = null;
     supportContactSince = null;
+    reaction = null;
+    reactionSequence = [];
+    reactionStep = -1;
+    reactionCenterPose = null;
+    pendingFailureReason = '';
     ikAngles = Object.fromEntries(
       ARM_JOINTS.map((joint) => [joint.name, data.qpos[joints.byName[joint.name].qposadr]])
     );
@@ -185,14 +239,25 @@ export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onCh
     lastError = 0;
     moveTarget = null;
     stackQueue = [];
+    pendingStackId = null;
     mode = 'put-away';
     carryOffset = null;
     supportContactSince = null;
+    reaction = null;
+    reactionSequence = [];
+    reactionStep = -1;
+    reactionCenterPose = null;
+    pendingFailureReason = '';
     notify();
     return true;
   }
 
   function fail(reason) {
+    if (mode === 'stack') {
+      pendingFailureReason = reason;
+      startReaction('shy');
+      return;
+    }
     running = false;
     message = reason;
     physics.setTarget('joint7', OPEN_WIDTH);
@@ -285,20 +350,107 @@ export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onCh
     };
   }
 
+  function reactionPose(overrides = {}, relative = false) {
+    const base = reactionCenterPose || homePose(joints);
+    const pose = {
+      ...base,
+      joint7: OPEN_WIDTH,
+      joint_left: OPEN_WIDTH,
+      joint_right: OPEN_WIDTH
+    };
+    Object.entries(overrides).forEach(([name, value]) => {
+      if (!relative) {
+        pose[name] = value;
+        return;
+      }
+      const joint = joints.byName[name];
+      pose[name] = Math.min(joint.max, Math.max(joint.min, base[name] + value));
+    });
+    return pose;
+  }
+
+  function reactionStepPose(step) {
+    return reactionPose(step.offset, true);
+  }
+
+  function cameraFacingPose() {
+    const pose = { ...CAMERA_FACING_POSE };
+    const observer = getObserverPosition?.();
+    if (!Number.isFinite(observer?.x) || !Number.isFinite(observer?.y)) return pose;
+    const azimuth = Math.atan2(observer.y, observer.x);
+    const joint = joints.byName.joint1;
+    pose.joint1 = Math.min(joint.max, Math.max(joint.min, -azimuth));
+    return pose;
+  }
+
+  function reactionPoseReached(pose) {
+    return ARM_JOINTS.every((joint) => {
+      const target = pose[joint.name] ?? 0;
+      const actual = data.qpos[joints.byName[joint.name].qposadr];
+      return Math.abs(target - actual) < REACTION_JOINT_TOLERANCE;
+    });
+  }
+
+  function startReaction(nextReaction) {
+    reaction = nextReaction;
+    reactionSequence = nextReaction === 'happy' ? HAPPY_REACTION : SHY_REACTION;
+    reactionStep = -1;
+    reactionCenterPose = cameraFacingPose();
+    physics.setTargets(reactionPose());
+    enter(nextReaction === 'happy' ? 'celebrate-centering' : 'shy-centering');
+  }
+
+  function startReactionStep(index) {
+    reactionStep = index;
+    const step = reactionSequence[index];
+    physics.setTargets(reactionStepPose(step));
+    enter(reaction === 'happy' ? 'celebrate' : 'shy');
+  }
+
+  function finishReaction() {
+    running = false;
+    if (reaction === 'happy') {
+      message = 'stack-complete';
+      enter('complete');
+    } else {
+      message = pendingFailureReason || 'stack-failed';
+      enter('failed');
+    }
+  }
+
+  function updateReaction(now, elapsed) {
+    if (reactionStep < 0) {
+      if (reactionPoseReached(reactionPose()) || elapsed > REACTION_CENTER_TIMEOUT) {
+        startReactionStep(0);
+      }
+      return;
+    }
+    const step = reactionSequence[reactionStep];
+    const targetPose = reactionStepPose(step);
+    if ((elapsed >= step.hold && reactionPoseReached(targetPose)) || elapsed > step.timeout) {
+      const next = reactionStep + 1;
+      if (next < reactionSequence.length) startReactionStep(next);
+      else finishReaction();
+    }
+  }
+
   function finishPlacement() {
     if (mode === 'stack' && stackQueue.length > 0) {
-      const nextId = stackQueue.shift();
-      pendingStackId = nextId;
-      stage = 'homing';
-      stageStartedAt = data.time;
-      moveTarget = null;
-      physics.setTargets(homePose(joints));
-      physics.setTarget('joint7', OPEN_WIDTH);
-      notify();
+      pendingStackId = stackQueue.shift();
+      physics.setTargets({
+        ...STACK_READY_POSE,
+        joint7: OPEN_WIDTH,
+        joint_left: OPEN_WIDTH,
+        joint_right: OPEN_WIDTH
+      });
+      enter('centering');
     } else {
-      running = false;
-      message = mode === 'stack' ? 'stack-complete' : 'complete';
-      enter('complete');
+      if (mode === 'stack') startReaction('happy');
+      else {
+        running = false;
+        message = 'complete';
+        enter('complete');
+      }
     }
   }
 
@@ -309,8 +461,10 @@ export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onCh
     lastUpdateAt = now;
     const elapsed = now - stageStartedAt;
 
-    if (stage === 'homing') {
-      if (elapsed > 0.35) begin(pendingStackId, STACK_TARGETS[pendingStackId], 'stack');
+    if (stage === 'centering') {
+      if (reactionPoseReached(STACK_READY_POSE) || elapsed > STACK_CENTER_TIMEOUT) {
+        begin(pendingStackId, STACK_TARGETS[pendingStackId], 'stack');
+      }
     } else if (stage === 'opening') {
       const width = data.qpos[joints.byName.joint7.qposadr];
       if ((width > OPEN_WIDTH - 0.006 && elapsed > 0.18) || elapsed > 1.1) {
@@ -382,6 +536,13 @@ export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onCh
         (elapsed >= TOWER_SETTLE_TIME && selectedLinearSpeed() < MAX_PLACEMENT_SPEED * 0.5) ||
         elapsed > 1.2
       ) finishPlacement();
+    } else if (
+      stage === 'celebrate-centering' ||
+      stage === 'celebrate' ||
+      stage === 'shy-centering' ||
+      stage === 'shy'
+    ) {
+      updateReaction(now, elapsed);
     }
     notify();
     return snapshot();
@@ -395,9 +556,15 @@ export function createGraspDemo({ mujoco, model, data, joints, physics, ik, onCh
     objectStart = null;
     moveTarget = null;
     dropTarget = null;
+    pendingStackId = null;
     expectedSupportBodyId = tableBodyId;
     carryOffset = null;
     supportContactSince = null;
+    reaction = null;
+    reactionSequence = [];
+    reactionStep = -1;
+    reactionCenterPose = null;
+    pendingFailureReason = '';
     lastError = 0;
     message = '';
     notify();

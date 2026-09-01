@@ -307,16 +307,33 @@ async function main() {
   }
 
   physics.reset();
+  const browserObserver = { x: 0.85, y: -0.95, z: 0.62 };
   const stackOffsets = {};
+  const stackStages = new Set();
+  const happyJoint6Offsets = [];
+  const happyJoint5Offsets = [];
+  let minimumHappyTcpZ = Infinity;
   const stackDemo = createGraspDemo({
     mujoco, model, data, joints, physics, ik,
+    getObserverPosition: () => browserObserver,
     onChange: (state) => {
+      stackStages.add(state.stage);
       if (state.carryOffset) stackOffsets[state.selectedId] = state.carryOffset;
     }
   });
   stackDemo.startStack();
   for (let frame = 0; frame < 12000 && stackDemo.isRunning(); frame += 1) {
     stackDemo.update();
+    const reactionState = stackDemo.state();
+    if (reactionState.stage === 'celebrate' && reactionState.reactionCenterPose) {
+      minimumHappyTcpZ = Math.min(minimumHappyTcpZ, ik.tcpPosition().z);
+      happyJoint6Offsets.push(
+        data.qpos[joints.byName.joint6.qposadr] - reactionState.reactionCenterPose.joint6
+      );
+      happyJoint5Offsets.push(
+        data.qpos[joints.byName.joint5.qposadr] - reactionState.reactionCenterPose.joint5
+      );
+    }
     physics.step(graspPhysicsSteps);
   }
   const stackState = stackDemo.state();
@@ -329,7 +346,64 @@ async function main() {
   const stackedBlue = bodyPos(mujoco, model, data, 'blue_block');
   const stackedRed = bodyPos(mujoco, model, data, 'red_cube');
   const stackedYellow = bodyPos(mujoco, model, data, 'yellow_cylinder');
-  assert(stackState.stage === 'complete', `叠叠乐未完成：${stackState.stage}/${stackState.message}`);
+  assert(
+    stackState.stage === 'complete',
+    `叠叠乐未完成：${stackState.selectedId}/${stackState.stage}/${stackState.message}; ` +
+      `objects=${JSON.stringify(stackAtCompletion)}; tcp=${JSON.stringify(ik.tcpPosition())}`
+  );
+  assert(
+    stackStages.has('centering') &&
+      stackStages.has('celebrate-centering') &&
+      stackStages.has('celebrate') &&
+      !stackStages.has('celebrate-homing') &&
+      !stackStages.has('homing'),
+    `叠叠乐成功后没有执行庆祝动作：${Array.from(stackStages).join(',')}`
+  );
+  assert(stackState.reactionCenterPose, '叠叠乐庆祝没有保存面向镜头的中位姿态');
+  const expectedCameraFacingPose = {
+    joint1: -Math.atan2(browserObserver.y, browserObserver.x),
+    joint2: 0.5515,
+    joint3: 0.2688,
+    joint4: 0.80,
+    joint5: 0.0471,
+    joint6: 0
+  };
+  Object.entries(expectedCameraFacingPose).forEach(([name, expected]) => {
+    assert(
+      Math.abs(stackState.reactionCenterPose[name] - expected) < 1e-6,
+      `镜头中位的 ${name} 不正确：${stackState.reactionCenterPose[name]}/${expected}`
+    );
+  });
+  assert(
+    Math.min(...happyJoint6Offsets) < -0.20 && Math.max(...happyJoint6Offsets) > 0.20,
+    `庆祝动作没有用 J6 完成左右扭头：${Math.min(...happyJoint6Offsets)},${Math.max(...happyJoint6Offsets)}`
+  );
+  assert(
+    Math.max(...happyJoint5Offsets) > 0.14,
+    `庆祝动作没有完成歪头：${Math.max(...happyJoint5Offsets)}`
+  );
+  assert(minimumHappyTcpZ > 0.20, `庆祝动作末端过低，TCP z=${minimumHappyTcpZ}`);
+  const happyCenterError = Math.max(...ARM_JOINTS.map((joint) =>
+    Math.abs(
+      data.qpos[joints.byName[joint.name].qposadr] - stackState.reactionCenterPose[joint.name]
+    )
+  ));
+  assert(happyCenterError < 0.08, `庆祝结束后没有停在镜头中位：${happyCenterError}`);
+  const wristCameraMatrix = Array.from(
+    data.cam_xmat.subarray(wristCameraId * 9, wristCameraId * 9 + 9)
+  );
+  const wristCameraUpZ = wristCameraMatrix[7];
+  const wristCameraForward = [-wristCameraMatrix[2], -wristCameraMatrix[5]];
+  const observerDirection = [
+    browserObserver.x - data.cam_xpos[wristCameraId * 3],
+    browserObserver.y - data.cam_xpos[wristCameraId * 3 + 1]
+  ];
+  const facingDot =
+    (wristCameraForward[0] * observerDirection[0] +
+      wristCameraForward[1] * observerDirection[1]) /
+    (Math.hypot(...wristCameraForward) * Math.hypot(...observerDirection));
+  assert(wristCameraUpZ > 0.99, `情绪中位的腕部相机没有保持竖直：${wristCameraUpZ}`);
+  assert(facingDot > 0.98, `情绪中位没有面向浏览器用户视角：${facingDot}`);
   [
     ['blue', stackedBlue],
     ['red', stackedRed],
@@ -352,7 +426,8 @@ async function main() {
   ];
   assert(
     adjacentOffsets.every((offset) => offset < 0.008),
-    `叠放层中心偏差过大：${adjacentOffsets.join(',')}`
+    `叠放层中心偏差过大：${adjacentOffsets.join(',')}; ` +
+      `blue=${stackedBlue.join(',')}; red=${stackedRed.join(',')}; yellow=${stackedYellow.join(',')}`
   );
   const settleDrift = Math.max(
     ...Object.entries(stackAtCompletion).map(([id, position]) => {
@@ -371,9 +446,10 @@ async function main() {
   // Reproduce the UI workflow that used to knock the finished tower over:
   // put all objects into their zones first, then run the stack demo without a reset.
   physics.reset();
+  const storedStackStages = new Set();
   const storedThenStackedDemo = createGraspDemo({
     mujoco, model, data, joints, physics, ik,
-    onChange: () => {}
+    onChange: (state) => storedStackStages.add(state.stage)
   });
   for (const target of ['red', 'blue', 'yellow']) {
     storedThenStackedDemo.start(target);
@@ -396,6 +472,14 @@ async function main() {
   assert(
     storedThenStackedState.stage === 'complete',
     `先收纳再叠放未完成：${storedThenStackedState.stage}/${storedThenStackedState.message}`
+  );
+  assert(
+    storedStackStages.has('centering') &&
+      storedStackStages.has('celebrate-centering') &&
+      storedStackStages.has('celebrate') &&
+      !storedStackStages.has('celebrate-homing') &&
+      !storedStackStages.has('homing'),
+    `先收纳再叠放后没有执行庆祝动作：${Array.from(storedStackStages).join(',')}`
   );
   const storedStackAtCompletion = {
     blue: bodyPos(mujoco, model, data, 'blue_block'),
@@ -438,6 +522,49 @@ async function main() {
     `机械臂撤离后叠塔被碰斜：${storedStackUpright.join(',')}`
   );
 
+  physics.reset();
+  const failureStages = new Set();
+  let minimumShyTcpZ = Infinity;
+  let sabotaged = false;
+  const failureDemo = createGraspDemo({
+    mujoco, model, data, joints, physics, ik,
+    onChange: (state) => failureStages.add(state.stage)
+  });
+  objectPositionController.setEnabled(true);
+  objectPositionController.setSelected('blue');
+  failureDemo.startStack();
+  for (let frame = 0; frame < 6000 && failureDemo.isRunning(); frame += 1) {
+    const state = failureDemo.state();
+    if (!sabotaged && state.selectedId === 'blue' && state.stage === 'closing') {
+      const moved = objectPositionController.move(0.20, -0.10);
+      assert(moved.ok, `失败动作测试无法移开蓝色块：${JSON.stringify(moved)}`);
+      sabotaged = true;
+    }
+    failureDemo.update();
+    if (failureDemo.state().stage === 'shy') {
+      minimumShyTcpZ = Math.min(minimumShyTcpZ, ik.tcpPosition().z);
+    }
+    physics.step(graspPhysicsSteps);
+  }
+  objectPositionController.setEnabled(false);
+  const failureState = failureDemo.state();
+  assert(sabotaged, '失败动作测试没有触发抓取破坏');
+  assert(
+    failureState.stage === 'failed' && failureState.reaction === 'shy',
+    `叠叠乐失败后没有进入害羞终态：${failureState.stage}/${failureState.reaction}`
+  );
+  assert(
+    failureStages.has('shy-centering') && failureStages.has('shy'),
+    `叠叠乐失败后没有执行低头动作：${Array.from(failureStages).join(',')}`
+  );
+  assert(minimumShyTcpZ > 0.13, `低头动作过低，TCP z=${minimumShyTcpZ}`);
+  const failureArmError = Math.max(...ARM_JOINTS.map((joint) =>
+    Math.abs(
+      data.qpos[joints.byName[joint.name].qposadr] - failureState.reactionCenterPose[joint.name]
+    )
+  ));
+  assert(failureArmError < 0.08, `害羞动作结束后没有回到镜头中位：${failureArmError}`);
+
   console.log(JSON.stringify({
     ngeom: model.ngeom,
     ncam: model.ncam,
@@ -468,6 +595,13 @@ async function main() {
       red: stackedRed,
       yellow: stackedYellow,
       carryOffsets: stackOffsets,
+      reactionStages: Array.from(stackStages).filter((stage) => stage.includes('celebrate')),
+      joint6OffsetRange: [Math.min(...happyJoint6Offsets), Math.max(...happyJoint6Offsets)],
+      maximumHeadTilt: Math.max(...happyJoint5Offsets),
+      minimumTcpZ: minimumHappyTcpZ,
+      finalCenterError: happyCenterError,
+      wristCameraUpZ,
+      observerFacingDot: facingDot,
       adjacentOffsets,
       settleDrift,
       upright
@@ -480,6 +614,14 @@ async function main() {
       adjacentOffsets: storedStackOffsets,
       settleDrift: storedStackDrift,
       upright: storedStackUpright
+    },
+    failedStackReaction: {
+      stage: failureState.stage,
+      reaction: failureState.reaction,
+      message: failureState.message,
+      stages: Array.from(failureStages).filter((stage) => stage.includes('shy')),
+      minimumTcpZ: minimumShyTcpZ,
+      finalArmError: failureArmError
     }
   }, null, 2));
 

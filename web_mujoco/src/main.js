@@ -443,6 +443,11 @@ async function main() {
     joints,
     physics,
     ik,
+    getObserverPosition: () => ({
+      x: view.camera.position.x,
+      y: view.camera.position.y,
+      z: view.camera.position.z
+    }),
     onChange: (state) => {
       graspState = state;
       selectedVisionTarget = state.selectedId;
