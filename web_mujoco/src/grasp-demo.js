@@ -41,13 +41,15 @@ const CAMERA_FACING_POSE = {
 };
 const REACTION_CENTER_TIMEOUT = 1.8;
 const REACTION_JOINT_TOLERANCE = 0.07;
+const REACTION_GRIP_TOLERANCE = 0.006;
 const STACK_CENTER_TIMEOUT = 1.4;
 const HAPPY_REACTION = [
   { hold: 0.48, timeout: 1.00, offset: { joint6: -0.55 } },
   { hold: 0.48, timeout: 1.00, offset: { joint6: 0.55 } },
   { hold: 0.35, timeout: 0.85, offset: {} },
   { hold: 0.65, timeout: 1.15, offset: { joint5: 0.36 } },
-  { hold: 0.48, timeout: 1.00, offset: {} }
+  { hold: 0.40, timeout: 1.00, offset: {}, grip: 0 },
+  { hold: 0.48, timeout: 1.10, offset: {}, grip: OPEN_WIDTH }
 ];
 const SHY_REACTION = [
   { hold: 0.75, timeout: 1.25, offset: { joint2: -0.10, joint3: 0.06, joint5: 0.34 } },
@@ -370,7 +372,13 @@ export function createGraspDemo({
   }
 
   function reactionStepPose(step) {
-    return reactionPose(step.offset, true);
+    const pose = reactionPose(step.offset, true);
+    if (Number.isFinite(step.grip)) {
+      pose.joint7 = step.grip;
+      pose.joint_left = step.grip;
+      pose.joint_right = step.grip;
+    }
+    return pose;
   }
 
   function cameraFacingPose() {
@@ -384,11 +392,15 @@ export function createGraspDemo({
   }
 
   function reactionPoseReached(pose) {
-    return ARM_JOINTS.every((joint) => {
+    const armReached = ARM_JOINTS.every((joint) => {
       const target = pose[joint.name] ?? 0;
       const actual = data.qpos[joints.byName[joint.name].qposadr];
       return Math.abs(target - actual) < REACTION_JOINT_TOLERANCE;
     });
+    const gripReached =
+      !Number.isFinite(pose.joint7) ||
+      Math.abs(data.qpos[joints.byName.joint7.qposadr] - pose.joint7) < REACTION_GRIP_TOLERANCE;
+    return armReached && gripReached;
   }
 
   function startReaction(nextReaction) {

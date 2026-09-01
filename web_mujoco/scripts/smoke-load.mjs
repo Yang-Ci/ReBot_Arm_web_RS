@@ -312,6 +312,7 @@ async function main() {
   const stackStages = new Set();
   const happyJoint6Offsets = [];
   const happyJoint5Offsets = [];
+  const happyGripWidths = [];
   let minimumHappyTcpZ = Infinity;
   const stackDemo = createGraspDemo({
     mujoco, model, data, joints, physics, ik,
@@ -333,6 +334,7 @@ async function main() {
       happyJoint5Offsets.push(
         data.qpos[joints.byName.joint5.qposadr] - reactionState.reactionCenterPose.joint5
       );
+      happyGripWidths.push(data.qpos[joints.byName.joint7.qposadr]);
     }
     physics.step(graspPhysicsSteps);
   }
@@ -381,6 +383,14 @@ async function main() {
   assert(
     Math.max(...happyJoint5Offsets) > 0.14,
     `庆祝动作没有完成歪头：${Math.max(...happyJoint5Offsets)}`
+  );
+  assert(
+    Math.min(...happyGripWidths) < 0.008 && Math.max(...happyGripWidths) > 0.040,
+    `庆祝动作没有完成夹爪闭合再张开：${Math.min(...happyGripWidths)},${Math.max(...happyGripWidths)}`
+  );
+  assert(
+    data.qpos[joints.byName.joint7.qposadr] > 0.040,
+    `庆祝结束后夹爪没有保持张开：${data.qpos[joints.byName.joint7.qposadr]}`
   );
   assert(minimumHappyTcpZ > 0.20, `庆祝动作末端过低，TCP z=${minimumHappyTcpZ}`);
   const happyCenterError = Math.max(...ARM_JOINTS.map((joint) =>
@@ -598,6 +608,7 @@ async function main() {
       reactionStages: Array.from(stackStages).filter((stage) => stage.includes('celebrate')),
       joint6OffsetRange: [Math.min(...happyJoint6Offsets), Math.max(...happyJoint6Offsets)],
       maximumHeadTilt: Math.max(...happyJoint5Offsets),
+      gripWidthRange: [Math.min(...happyGripWidths), Math.max(...happyGripWidths)],
       minimumTcpZ: minimumHappyTcpZ,
       finalCenterError: happyCenterError,
       wristCameraUpZ,
