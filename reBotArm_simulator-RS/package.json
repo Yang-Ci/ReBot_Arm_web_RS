@@ -6,7 +6,6 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "build:pages": "node scripts/build-pages.cjs",
     "start:https": "powershell -ExecutionPolicy Bypass -Command \"$env:HTTPS='1'; $env:PORT='3444'; node server.js\"",
     "cert:dev": "pwsh -ExecutionPolicy Bypass -File scripts/create-dev-cert.ps1"
   }

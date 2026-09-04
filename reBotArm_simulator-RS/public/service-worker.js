@@ -1,25 +1,23 @@
-const CACHE_NAME = 'rebot-arm-rs-pwa-v90-pages01';
-const SCOPE_URL = new URL(self.registration.scope);
-const API_PREFIX = new URL('api/', SCOPE_URL).pathname;
+const CACHE_NAME = 'rebot-arm-rs-pwa-v89-control49';
 const APP_SHELL = [
-  './',
-  './index.html',
-  './manifest.webmanifest',
-  './favicon.png',
-  './css/rebot-sim.css?v=20260813-rs-guide43',
-  './js/pwa.js?v=20260904-rs-pages01',
-  './js/i18n.js?v=20260824-rs-control44',
-  './js/ros/rebot-ros-client.js?v=20260812-rs-ctrl37',
-  './js/rebot-sim.js?v=20260904-rs-teach02',
-  './js/control-mode.js?v=20260812-rs-ctrl32',
-  './js/ros/rebot-ros-ui.js?v=20260904-rs-teach02',
-  './js/rebot-llm.js?v=20260904-rs-pages01',
-  './lib/three-r128.min.js',
-  './lib/STLLoader-umd.js',
-  './lib/URDFLoader.js',
-  './js/motorbridge/rebot-motorbridge-client.js?v=20260812-rs-ctrl32',
-  './js/motorbridge/rebot-motorbridge-ui.js?v=20260812-rs-ctrl32'
-].map((path) => new URL(path, SCOPE_URL).href);
+  '/',
+  '/index.html',
+  '/manifest.webmanifest',
+  '/favicon.png',
+  '/css/rebot-sim.css?v=20260813-rs-guide43',
+  '/js/pwa.js?v=20260812-rs-ctrl32',
+  '/js/i18n.js?v=20260824-rs-control44',
+  '/js/rebot-sim.js?v=20260824-rs-control44',
+  '/js/ros/rebot-ros-client.js?v=20260812-rs-ctrl32',
+  '/js/control-mode.js?v=20260812-rs-ctrl32',
+  '/js/ros/rebot-ros-ui.js?v=20260824-rs-control46',
+  '/js/rebot-llm.js?v=20260813-rs-guide43',
+  '/lib/three-r128.min.js',
+  '/lib/STLLoader-umd.js',
+  '/lib/URDFLoader.js',
+  '/js/motorbridge/rebot-motorbridge-client.js?v=20260812-rs-ctrl32',
+  '/js/motorbridge/rebot-motorbridge-ui.js?v=20260812-rs-ctrl32'
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -45,7 +43,7 @@ self.addEventListener('fetch', (event) => {
 
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
 
-  if (url.pathname.startsWith(API_PREFIX)) {
+  if (url.pathname.startsWith('/api/')) {
     event.respondWith(fetch(request).catch(function () {
       return new Response('{"error":"network error"}', {
         status: 502,
@@ -71,9 +69,7 @@ self.addEventListener('fetch', (event) => {
         })
         .catch(() => caches.match(request).then((cached) => {
           if (cached) return cached;
-          if (request.mode === 'navigate') {
-            return caches.match(new URL('index.html', SCOPE_URL));
-          }
+          if (request.mode === 'navigate') return caches.match('/index.html');
           return Response.error();
         }))
     );
