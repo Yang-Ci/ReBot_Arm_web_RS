@@ -98,16 +98,19 @@ export REBOTARM_RS_HARDWARE_CONFIRM=I_UNDERSTAND_RS_WILL_MOVE
 
 1. 启动 RS 真机 ROS 2 Controller 与 rosbridge，网页选择“RS 真机”。
 2. 连接 rosbridge，收到 `/rebotarm/joint_states` 后打开控制锁。
-3. 点击“推动真机示教”。网页会请求进入重力补偿，成功后开始记录。
+3. 选择“完整路径（按原时间回放）”或“仅最终位置（3 秒到位）”，再点击
+   “推动真机示教”。网页会请求进入重力补偿，成功后开始记录。
 4. 用手轻推机械臂完成需要的轨迹，再点击“结束真机示教”退出重力补偿。
 5. 点击“回放”执行，或点击“导出 / 下载 JSON”保存；之后可用“导入 JSON”
    恢复同一条轨迹。
 
-录制数据来自 `/joint_states` 的原始 `position`，不做滤波、死区、抽稀或平滑；
+“完整路径”模式的数据来自 `/joint_states` 的原始 `position`，不做滤波、死区、抽稀或平滑；
 时间优先使用 `header.stamp` 的整数纳秒，缺失时才回退到浏览器时钟。导出为
 JSON，JavaScript number 与整数纳秒时间戳原样保留。回放同样使用原始 waypoint
 和整数纳秒间隔，仅在正式轨迹前加入“当前姿态到示教起点”的安全引导段。
 录制期间网页滑块、TCP 拖拽和回放命令会被拒绝，避免和人工推动互相抢控制权。
+“仅最终位置”模式只保留结束示教前收到的最后一组关节位置；回放复用 IK
+运动模块的平滑关节插值，从当前反馈姿态用固定 3 秒运动到该位置。
 
 导入兼容 `rebotarm_ros_waypoints_v1` 与 `rebotarm_rs_teach_v1`。新格式会校验
 关节名、点位数量、数值、时间单调性以及 `ros_stamp` 与 `time_from_start`

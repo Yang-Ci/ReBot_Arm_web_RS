@@ -104,6 +104,7 @@
   let teachingWaypoints = [];
   let teachingPlayback = null;
   let teachingSource = 'web';
+  let teachingMode = 'path';
   let hardwareTeachOriginNs = null;
   let hardwareTeachFallbackStart = 0;
   const TEACH_SAMPLE_INTERVAL_MS = 90;
@@ -111,6 +112,7 @@
   const TEACH_REPLAY_SAMPLE_HZ = 30;
   const TEACH_REPLAY_MAX_POINTS = 1500;
   const TEACH_REPLAY_RETURN_SPEED_RAD_S = 1.2;
+  const TEACH_ENDPOINT_DURATION_MS = 3000;
  const commandListeners = new Set();
  const axisLabelSprites = [];
   let carriedObject = null;
@@ -129,6 +131,7 @@
     dragStatus: document.getElementById('drag-status'),
     teachRecord: document.getElementById('teach-record'),
     teachHardwareRecord: document.getElementById('teach-hardware-record'),
+    teachHardwareMode: document.getElementById('teach-hardware-mode'),
     teachReplay: document.getElementById('teach-replay'),
     teachExport: document.getElementById('teach-export'),
     teachImport: document.getElementById('teach-import'),
@@ -1297,6 +1300,9 @@
     gripperMotion = null;
     teachingRecording = true;
     teachingSource = 'hardware';
+    teachingMode = els.teachHardwareMode && els.teachHardwareMode.value === 'endpoint'
+      ? 'endpoint'
+      : 'path';
     teachingWaypoints = [];
     hardwareTeachOriginNs = null;
     hardwareTeachFallbackStart = performance.now();
@@ -1327,13 +1333,18 @@
       rosStamp = nsToRosStamp(stampNs);
     }
 
-    teachingWaypoints.push({
+    const point = {
       t: elapsedMs,
       joints: sample,
       source: 'hardware',
       raw: true,
       stamp: rosStamp
-    });
+    };
+    if (teachingMode === 'endpoint') {
+      teachingWaypoints = [point];
+    } else {
+      teachingWaypoints.push(point);
+    }
 
     const now = performance.now();
     if (now - hardwareTeachLastStatusAt >= 120) {
@@ -1374,6 +1385,7 @@
     } else {
       teachingWaypoints = [];
       teachingSource = 'web';
+      teachingMode = 'path';
       hardwareTeachOriginNs = null;
       teachingStart = performance.now();
       teachingLastSample = 0;
@@ -1439,6 +1451,7 @@
     let claimedByController = false;
     emitCommand({
       type: 'teaching-replay',
+      mode: teachingMode,
       waypoints: replayPoints,
       claim(options) {
         claimedByController = true;
@@ -1474,6 +1487,16 @@
       stamp: point.stamp ? { ...point.stamp } : null,
       time_from_start: point.time_from_start ? { ...point.time_from_start } : null
     }));
+    if (teachingMode === 'endpoint') {
+      if (!source.length) return source;
+      const endpoint = source[source.length - 1];
+      return [{
+        ...endpoint,
+        t: TEACH_ENDPOINT_DURATION_MS,
+        stamp: null,
+        time_from_start: null
+      }];
+    }
     if (source.length < 2) return source;
 
     // Hardware teaching is a measurement, not a generated web trajectory. Keep
@@ -1672,6 +1695,8 @@
       count: teachingWaypoints.length,
       source: raw ? 'hardware' : 'web',
       sample: raw ? 'raw' : 'web',
+      mode: teachingMode,
+      ...(teachingMode === 'endpoint' ? { duration_sec: TEACH_ENDPOINT_DURATION_MS / 1000 } : {}),
       waypoints: teachingWaypoints.map((point) => ({
         time_from_start: waypointRosTime(point, firstStampNs),
         positions: jointNames.map((name) => point.joints[name] ?? 0),
@@ -1765,15 +1790,22 @@
     }
 
     const sourcePoints = Array.isArray(payload.waypoints) ? payload.waypoints : [];
+    const importedMode = payload.mode === 'endpoint' ? 'endpoint' : 'path';
+    const minimumPoints = importedMode === 'endpoint' ? 1 : 2;
     if (
       (Number.isInteger(payload.count) && payload.count !== sourcePoints.length) ||
-      sourcePoints.length < 2
+      sourcePoints.length < minimumPoints
     ) {
       throw new Error('waypoint 数量不足或 count 不匹配');
     }
 
     const raw = payload.sample === 'raw' || payload.source === 'hardware';
     const points = [];
+    const stampsSupplied = sourcePoints.map((point) => Boolean(point && point.ros_stamp != null));
+    if (stampsSupplied.some(Boolean) && !stampsSupplied.every(Boolean)) {
+      throw new Error('ros_stamp 必须在所有 waypoint 中成对出现');
+    }
+    let firstStampNs = null;
     let previousStampNs = null;
     sourcePoints.forEach((sourcePoint, index) => {
       const positions = Array.isArray(sourcePoint.positions) ? sourcePoint.positions : [];
@@ -1789,23 +1821,22 @@
         joints[name] = value;
       });
 
-      const stamp = validRosStamp(sourcePoint.ros_stamp) ? sourcePoint.ros_stamp : null;
+      if (sourcePoint.ros_stamp != null && !validRosStamp(sourcePoint.ros_stamp)) {
+        throw new Error(`第 ${index + 1} 点 ros_stamp 无效`);
+      }
+      const stamp = sourcePoint.ros_stamp != null ? sourcePoint.ros_stamp : null;
       const time = validRosStamp(sourcePoint.time_from_start)
         ? sourcePoint.time_from_start
         : null;
       if (!time) throw new Error(`第 ${index + 1} 点 time_from_start 无效`);
       const timeNs = rosStampToNs(time);
       const stampNs = stamp ? rosStampToNs(stamp) : null;
-      if (stamp && stampNs === null) throw new Error(`第 ${index + 1} 点 ros_stamp 无效`);
-      if ((stamp || previousStampNs !== null) && (stamp === null || previousStampNs === null)) {
-        throw new Error('ros_stamp 必须在所有 waypoint 中成对出现');
-      }
       if (stampNs !== null) {
         if (previousStampNs !== null && stampNs <= previousStampNs) {
           throw new Error('ros_stamp 必须严格递增');
         }
-        const originNs = previousStampNs === null ? stampNs : previousStampNs;
-        const relativeNs = stampNs - originNs;
+        if (firstStampNs === null) firstStampNs = stampNs;
+        const relativeNs = stampNs - firstStampNs;
         if (relativeNs !== timeNs) {
           throw new Error(`第 ${index + 1} 点 time_from_start 与 ros_stamp 不一致`);
         }
@@ -1829,6 +1860,8 @@
     teachingPlayback = null;
     teachingWaypoints = points;
     teachingSource = raw ? 'hardware' : 'import';
+    teachingMode = importedMode;
+    if (els.teachHardwareMode) els.teachHardwareMode.value = teachingMode;
     hardwareTeachOriginNs = null;
     if (els.teachExportText) els.teachExportText.value = text;
     updateTeachingStatus(t('sim.imported', { n: points.length }));
@@ -1853,6 +1886,7 @@
     teachingPlayback = null;
     teachingWaypoints = [];
     teachingSource = 'web';
+    teachingMode = 'path';
     hardwareTeachOriginNs = null;
     if (els.teachExportText) els.teachExportText.value = '';
     updateTeachingStatus();
@@ -1869,11 +1903,14 @@
         : t('teach.hardwareRecord');
       els.teachHardwareRecord.classList.toggle('active', teachingRecording && teachingSource === 'hardware');
     }
+    if (els.teachHardwareMode) els.teachHardwareMode.disabled = teachingRecording;
     if (!els.teachStatus) return;
     if (message) {
       els.teachStatus.textContent = message;
     } else if (teachingRecording) {
-      els.teachStatus.textContent = teachingSource === 'hardware'
+      els.teachStatus.textContent = teachingSource === 'hardware' && teachingMode === 'endpoint'
+        ? t('sim.hardwareEndpointRecording')
+        : teachingSource === 'hardware'
         ? t('sim.hardwareRecording', {
           n: teachingWaypoints.length,
           sec: (teachingWaypoints.length ? teachingWaypoints[teachingWaypoints.length - 1].t / 1000 : 0).toFixed(3)
@@ -1884,7 +1921,9 @@
     } else if (teachingWaypoints.length) {
       const duration = teachingWaypoints[teachingWaypoints.length - 1].t / 1000;
       const raw = teachingWaypoints.every((point) => point.raw || point.source === 'hardware');
-      els.teachStatus.textContent = raw
+      els.teachStatus.textContent = raw && teachingMode === 'endpoint'
+        ? t('sim.hardwareEndpointRecorded')
+        : raw
         ? t('sim.hardwareRecorded', { n: teachingWaypoints.length, sec: duration.toFixed(3) })
         : t('sim.recorded', { n: teachingWaypoints.length, sec: duration.toFixed(1) });
     } else {

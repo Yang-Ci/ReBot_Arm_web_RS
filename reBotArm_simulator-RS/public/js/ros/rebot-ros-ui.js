@@ -35,6 +35,7 @@
   const DEFAULT_JOINT_VLIM_RAD_S = 1.20;
   const MAX_JOINT_VLIM_RAD_S = 1.50;
   const GRIPPER_VLIM_RAD_S = 5.0;
+  const TEACH_ENDPOINT_DURATION_S = 3;
   const VISION_TRANSIT_Z_M = 0.190;
   const VISION_TRANSIT_Z_BY_COLOR_M = {
     blue: 0.185,
@@ -114,7 +115,8 @@
     poseDuration: document.getElementById('ros-pose-duration'),
    checkIk: document.getElementById('ros-check-ik'),
    stopPath: document.getElementById('stop-path'),
-   teachHardwareRecord: document.getElementById('teach-hardware-record')
+   teachHardwareRecord: document.getElementById('teach-hardware-record'),
+   teachHardwareModeRow: document.getElementById('teach-hardware-mode-row')
   };
 
  if (!window.ReBotRosClient || !els.connect) return;
@@ -136,6 +138,7 @@
   }
   if (els.targetTitle) els.targetTitle.textContent = `${TARGET.label}连接`;
   if (els.teachHardwareRecord) els.teachHardwareRecord.hidden = TARGET_KEY !== 'hardware';
+  if (els.teachHardwareModeRow) els.teachHardwareModeRow.hidden = TARGET_KEY !== 'hardware';
   if (els.mirrorLabel) {
     els.mirrorLabel.textContent = TARGET_KEY === 'simulation'
       ? '镜像 RS MuJoCo 实际状态到网页'
@@ -1250,7 +1253,8 @@
     const waypoints = Array.isArray(command && command.waypoints)
       ? command.waypoints.filter((point) => point && point.joints)
       : [];
-    if (waypoints.length < 2 || !controlAllowed(false)) return;
+    const endpointOnly = command && command.mode === 'endpoint';
+    if ((!endpointOnly && waypoints.length < 2) || (endpointOnly && !waypoints.length) || !controlAllowed(false)) return;
     const finalJoints = waypoints[waypoints.length - 1].joints;
     if (TARGET_KEY === 'hardware') {
       Object.entries(finalJoints).forEach(([name, value]) => {
@@ -1284,18 +1288,36 @@
   async function runTeachingReplayOnRos(command, waypoints) {
     cancelLowLevelPlayback();
     cancelPendingWebMotionCommands();
+    const endpointOnly = command && command.mode === 'endpoint';
     const lastTime = Number(waypoints[waypoints.length - 1].t) || 0;
-    const recordedDuration = Math.max(0.4, lastTime / 1000);
-    const points = buildTeachingTrajectoryPoints(waypoints);
-    const label = `TCP 示教回放（${waypoints.length} 点 / ${recordedDuration.toFixed(1)} 秒）`;
+    const recordedDuration = endpointOnly ? TEACH_ENDPOINT_DURATION_S : Math.max(0.4, lastTime / 1000);
+    let points;
+    if (endpointOnly) {
+      const start = getCurrentRosPositions();
+      const finalJoints = waypoints[waypoints.length - 1].joints;
+      const goal = JOINT_NAMES.map((name, index) => {
+        const value = Number(finalJoints[name]);
+        return Number.isFinite(value) ? value : start[index];
+      });
+      points = buildSmoothJointMovePoints(start, goal, TEACH_ENDPOINT_DURATION_S);
+    } else {
+      points = buildTeachingTrajectoryPoints(waypoints);
+    }
+    const label = endpointOnly
+      ? '真机示教最终位置（3.0 秒）'
+      : `TCP 示教回放（${waypoints.length} 点 / ${recordedDuration.toFixed(1)} 秒）`;
     let success = false;
     let message = '真机示教回放失败，请查看 ROS 日志';
     try {
-      const result = await sendTrajectory(points, label, { profile: 'teaching-replay' });
+      const result = await sendTrajectory(
+        points,
+        label,
+        endpointOnly ? undefined : { profile: 'teaching-replay' }
+      );
       success = result === true || Boolean(
         result && result.success !== false && result.accepted !== false
       );
-      if (success) message = '真机示教回放完成';
+      if (success) message = endpointOnly ? '已用 3 秒运动到示教最终位置' : '真机示教回放完成';
     } catch (error) {
       writeLog(`真机示教回放失败：${error && error.message ? error.message : error}`, 'error');
     } finally {
