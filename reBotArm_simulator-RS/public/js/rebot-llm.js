@@ -1,4 +1,6 @@
 (function () {
+  const API_BASE = new URL('api/', document.baseURI);
+  const apiFetch = (path, init) => fetch(new URL(path, API_BASE), init);
   const TEXT_AGENT_START_GUIDE = [
     '网页只能连接 text-agent，不能自动启动虚拟机里的服务。',
     '',
@@ -19,6 +21,7 @@
     constructor() {
       this.started = false;
       this.config = { textAgentUrl: '', mcpUrl: '' };
+      this.backendAvailable = false;
       this.elements = {};
     }
 
@@ -49,11 +52,16 @@
       });
 
       // 初始加载配置（仅用于显示）
-      fetch('/api/mcp/config').then(r => r.json()).then(cfg => {
+      apiFetch('mcp/config').then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      }).then(cfg => {
         this.config = cfg;
+        this.backendAvailable = true;
         this.elements.message.textContent = `连接地址: ${cfg.textAgentUrl}  ·  MCP: ${cfg.mcpUrl}。首次使用请展开下方启动说明。`;
       }).catch(() => {
-        this.elements.message.textContent = '加载配置失败';
+        this.backendAvailable = false;
+        this.elements.message.textContent = '当前静态部署没有 Node 代理；模型与 ROS 面板可用，AI 助手请使用本地 npm start 服务。';
       });
 
       this.updateStatus('未启动');
@@ -70,6 +78,12 @@
     }
 
     async handleStart() {
+      if (!this.backendAvailable) {
+        this.updateStatus('启动失败');
+        this.elements.message.textContent = '当前静态部署没有 Node 代理；AI 助手请使用本地 npm start 服务。';
+        this.addMessage('error', 'GitHub Pages 是静态部署，无法代理 text-agent / MCP。请在本机启动 reBotArm_simulator-RS 后使用 AI 助手。');
+        return;
+      }
       console.log('[LLM UI] handleStart');
       this.elements.startBtn.disabled = true;
       this.updateStatus('启动中...');
@@ -78,7 +92,7 @@
 
       try {
         // 健康检查
-        const res = await fetch('/api/llm/health');
+        const res = await apiFetch('llm/health');
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.ok === false) {
           throw new Error(data.error || `text-agent 返回 HTTP ${res.status}`);
@@ -112,7 +126,7 @@
       this.elements.startBtn.disabled = false;
 
       // 通知后端清空上下文（如果有 reset 端点）
-      fetch('/api/llm/chat', {
+      apiFetch('llm/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: '__reset__', reset: true })
@@ -133,7 +147,7 @@
       this.elements.sendBtn.disabled = true;
 
       try {
-        const res = await fetch('/api/llm/chat', {
+        const res = await apiFetch('llm/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text })

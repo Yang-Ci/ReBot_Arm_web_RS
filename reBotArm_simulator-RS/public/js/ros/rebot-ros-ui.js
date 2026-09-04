@@ -113,7 +113,8 @@
     poseZ: document.getElementById('ros-pose-z'),
     poseDuration: document.getElementById('ros-pose-duration'),
    checkIk: document.getElementById('ros-check-ik'),
-   stopPath: document.getElementById('stop-path')
+   stopPath: document.getElementById('stop-path'),
+   teachHardwareRecord: document.getElementById('teach-hardware-record')
   };
 
  if (!window.ReBotRosClient || !els.connect) return;
@@ -134,6 +135,7 @@
     });
   }
   if (els.targetTitle) els.targetTitle.textContent = `${TARGET.label}连接`;
+  if (els.teachHardwareRecord) els.teachHardwareRecord.hidden = TARGET_KEY !== 'hardware';
   if (els.mirrorLabel) {
     els.mirrorLabel.textContent = TARGET_KEY === 'simulation'
       ? '镜像 RS MuJoCo 实际状态到网页'
@@ -200,6 +202,10 @@
   let activeVisionOperation = '';
   let queuedVisionOperation = null;
   let safeDisconnectBusy = false;
+  let hardwareTeachActive = false;
+  let hardwareTeachBusy = false;
+  let hardwareTeachGravityStarted = false;
+  let hardwareTeachModeConfirmed = false;
   let gravityCompensationActive = false;
   let gravityStatusSource = 'initial';
   let gravityStatusPollInFlight = false;
@@ -227,7 +233,9 @@
   let sliderFeedbackFrame = 0;
   let gripperRepublishTimer = 0;
 
-  client.subscribe(REQUIRED_TOPICS.jointStates, 'sensor_msgs/msg/JointState', handleJointStates, { throttleRate: 80 });
+  // Hardware teaching needs the full driver publication rate; throttling here
+  // would silently discard encoder samples.
+  client.subscribe(REQUIRED_TOPICS.jointStates, 'sensor_msgs/msg/JointState', handleJointStates, { throttleRate: 0 });
   if (TARGET_KEY === 'simulation') {
     client.subscribe(REQUIRED_TOPICS.mujocoJointStates, 'sensor_msgs/msg/JointState', handleMujocoJointStates, { throttleRate: 40 });
   }
@@ -249,6 +257,7 @@
     }
     updateDiagnostics();
    if (detail.state === 'closed' || detail.state === 'error') {
+     finishHardwareTeachLocal(detail.state === 'error' ? 'ROS 连接异常，真机示教已停止' : 'ROS 连接断开，真机示教已停止');
      resetFeedbackRenderer();
      updateGravityStatus(false, t('msg.rosNotConnected'), 'connection');
    }
@@ -267,23 +276,28 @@
     client.connect(nextUrl);
  });
  els.disconnect.addEventListener('click', disconnectRos);
-  window.addEventListener('pagehide', () => {
-    client.autoReconnect = false;
-    if (client.socket) client.socket.close();
-  });
-  els.enable.addEventListener('click', () => guardedCall(() => client.enable(), t('msg.reqEnable')));
-  els.disable.addEventListener('click', () => {
-    cancelLowLevelPlayback();
-    resetWebControlState();
-    void guardedCall(() => client.disable(), t('msg.reqDisable'), true)
-      .finally(resetWebControlState);
-  });
-  els.safeHome.addEventListener('click', () => {
-    cancelLowLevelPlayback();
-    resetWebControlState();
-    void guardedCall(() => client.safeHome(), t('msg.reqSafeHome'))
-      .finally(resetWebControlState);
-  });
+ window.addEventListener('pagehide', () => {
+   client.autoReconnect = false;
+   if (client.socket) client.socket.close();
+ });
+ els.teachHardwareRecord?.addEventListener('click', toggleHardwareTeaching);
+ els.enable.addEventListener('click', () => guardedCall(() => client.enable(), t('msg.reqEnable')));
+ els.disable.addEventListener('click', () => {
+   void stopHardwareTeaching(true).finally(() => {
+   cancelLowLevelPlayback();
+   resetWebControlState();
+   void guardedCall(() => client.disable(), t('msg.reqDisable'), true)
+     .finally(resetWebControlState);
+   });
+ });
+ els.safeHome.addEventListener('click', () => {
+   void stopHardwareTeaching(true).finally(() => {
+   cancelLowLevelPlayback();
+   resetWebControlState();
+   void guardedCall(() => client.safeHome(), t('msg.reqSafeHome'))
+     .finally(resetWebControlState);
+   });
+ });
  els.gravityStart.addEventListener('click', () => {
    cancelLowLevelPlayback();
    cancelPendingWebMotionCommands();
@@ -295,6 +309,7 @@
  });
  els.gravityStop.addEventListener('click', () => {
     cancelLowLevelPlayback();
+    if (hardwareTeachActive) void stopHardwareTeaching(false);
     guardedOptionalService(
       REQUIRED_SERVICES.gravityStop,
       () => client.stopGravityCompensation(),
@@ -335,7 +350,11 @@
   }
 
   els.control.addEventListener('change', () => {
-    if (els.control.checked) writeLog('控制锁已打开', 'info');
+    if (els.control.checked) {
+      writeLog('控制锁已打开', 'info');
+    } else if (hardwareTeachActive) {
+      void stopHardwareTeaching(true);
+    }
   });
   els.mirror.addEventListener('change', () => {
     resetFeedbackRenderer();
@@ -366,6 +385,10 @@
     if (!window.reBotSim || !Array.isArray(msg.name) || !Array.isArray(msg.position)) return;
     const next = jointAnglesFromState(msg);
     const useDriverState = TARGET_KEY !== 'simulation' || !mujocoStateIsFresh();
+
+    if (hardwareTeachActive && typeof window.reBotSim.appendHardwareTeachingSample === 'function') {
+      window.reBotSim.appendHardwareTeachingSample(next, msg.header && msg.header.stamp);
+    }
 
     if (useDriverState && Object.keys(next).length) {
       latestJointPositions = { ...(latestJointPositions || {}), ...next };
@@ -939,10 +962,105 @@
     const errors = Array.isArray(msg.error_codes) && msg.error_codes.length ? t('fb.errors', { codes: msg.error_codes.join(', ') }) : '';
     setMessage(`${enabled}，模式 ${mode}，状态 ${machine}${errors}`);
     updateGravityStatus(machine === 'GRAVITY_COMP', machine, 'arm');
+    if (machine === 'GRAVITY_COMP') hardwareTeachModeConfirmed = true;
+    if (hardwareTeachActive && hardwareTeachModeConfirmed && machine !== 'GRAVITY_COMP') {
+      void stopHardwareTeaching(false);
+    }
     updateDiagnostics();
   }
 
+  async function toggleHardwareTeaching() {
+    if (hardwareTeachBusy) return;
+    if (hardwareTeachActive) {
+      await stopHardwareTeaching(true);
+      return;
+    }
+    await startHardwareTeaching();
+  }
+
+  async function startHardwareTeaching() {
+    if (TARGET_KEY !== 'hardware') {
+      setMessage('推动示教仅支持 RS 真机目标');
+      return;
+    }
+    if (!client.connected) {
+      setStatus('closed', t('msg.rosNotConnected'));
+      return;
+    }
+    if (!controlAllowed(true)) return;
+    if (!latestJointPositions || performance.now() - latestJointStateAt > 500) {
+      setMessage('等待 /joint_states 反馈后再开始真机示教');
+      return;
+    }
+
+    hardwareTeachBusy = true;
+    hardwareTeachModeConfirmed = false;
+    updateHardwareTeachUi('正在进入重力补偿');
+    try {
+      const result = await guardedCall(
+        () => client.startGravityCompensation(),
+        '正在进入重力补偿以开始推动示教',
+        false
+      );
+      if (!result || result.success === false || result.accepted === false) return;
+      hardwareTeachActive = true;
+      hardwareTeachGravityStarted = true;
+      if (!els.mirror.checked) els.mirror.checked = true;
+      window.reBotSim.beginHardwareTeaching();
+      writeLog('真机推动示教开始：直接记录 /joint_states 原始位置', 'ok');
+    } finally {
+      hardwareTeachBusy = false;
+      updateHardwareTeachUi();
+    }
+  }
+
+  async function stopHardwareTeaching(stopGravity) {
+    if (!hardwareTeachActive) return;
+    hardwareTeachActive = false;
+    hardwareTeachModeConfirmed = false;
+    if (window.reBotSim && typeof window.reBotSim.endHardwareTeaching === 'function') {
+      window.reBotSim.endHardwareTeaching();
+    }
+    const shouldStopGravity = Boolean(stopGravity) && hardwareTeachGravityStarted && client.connected;
+    hardwareTeachGravityStarted = false;
+    updateHardwareTeachUi();
+    writeLog('真机推动示教录制已停止', 'info');
+    if (shouldStopGravity) {
+      await guardedCall(
+        () => client.stopGravityCompensation(),
+        '正在退出重力补偿',
+        true,
+        { keepConnectionStatus: true }
+      );
+    }
+  }
+
+  function finishHardwareTeachLocal(message) {
+    if (!hardwareTeachActive) return;
+    hardwareTeachActive = false;
+    hardwareTeachGravityStarted = false;
+    hardwareTeachModeConfirmed = false;
+    if (window.reBotSim && typeof window.reBotSim.endHardwareTeaching === 'function') {
+      window.reBotSim.endHardwareTeaching();
+    }
+    updateHardwareTeachUi();
+    writeLog(message || '真机推动示教已停止', 'warn');
+  }
+
+  function updateHardwareTeachUi(busyText) {
+    if (!els.teachHardwareRecord) return;
+    els.teachHardwareRecord.disabled = hardwareTeachBusy;
+    els.teachHardwareRecord.classList.toggle('active', hardwareTeachActive);
+    els.teachHardwareRecord.textContent = hardwareTeachActive
+      ? t('sim.stopHardwareRecord')
+      : (busyText || t('teach.hardwareRecord'));
+  }
+
  function forwardSimCommand(command) {
+   if (hardwareTeachActive) {
+     writeLog('真机推动示教中，已忽略网页控制指令', 'warn');
+     return;
+   }
    if (command && command.type === 'execute-current-pose') {
      void executeCurrentPoseCommand(command);
      return;
@@ -1433,6 +1551,7 @@
 
   async function disconnectRos() {
     if (safeDisconnectBusy) return;
+    await stopHardwareTeaching(true);
     cancelLowLevelPlayback();
     resetWebControlState();
 
@@ -1545,16 +1664,29 @@
   function buildTeachingTrajectoryPoints(waypoints) {
     // The browser playback clock starts at t=0 from its current pose. Use the
     // same origin for the action instead of adding a hidden 50 ms hold.
-    const points = [makeTrajectoryPoint(getCurrentRosPositions(), 0)];
-    let previousSeconds = 0;
+    const points = [makeTrajectoryPointAtNs(getCurrentRosPositions(), 0n)];
+    const firstStampNs = validRosStamp(waypoints[0] && waypoints[0].stamp)
+      ? rosStampToNs(waypoints[0].stamp)
+      : null;
+    const leadNs = millisecondsToNs(waypoints[0] ? waypoints[0].t : 0);
+    let previousNs = 0n;
     waypoints.forEach((point) => {
-      const desiredSeconds = Math.max(0, (Number(point.t) || 0) / 1000);
-      const seconds = Math.max(previousSeconds + 0.001, desiredSeconds);
-      points.push(makeTrajectoryPoint(
+      const pointStampNs = validRosStamp(point.stamp) ? rosStampToNs(point.stamp) : null;
+      let relativeNs;
+      if (pointStampNs !== null && firstStampNs !== null) {
+        relativeNs = pointStampNs - firstStampNs;
+      } else if (validRosStamp(point.time_from_start)) {
+        relativeNs = rosStampToNs(point.time_from_start);
+      } else {
+        relativeNs = millisecondsToNs(point.t);
+      }
+      const desiredNs = leadNs + relativeNs;
+      const timeNs = desiredNs > previousNs ? desiredNs : previousNs + 1n;
+      points.push(makeTrajectoryPointAtNs(
         JOINT_NAMES.map((name) => Number(point.joints[name]) || 0),
-        seconds
+        timeNs
       ));
-      previousSeconds = seconds;
+      previousNs = timeNs;
     });
     return points;
   }
@@ -1632,13 +1764,43 @@
   }
 
   function makeTrajectoryPoint(positions, seconds) {
+    return makeTrajectoryPointAtNs(positions, secondsToNs(seconds));
+  }
+
+  function makeTrajectoryPointAtNs(positions, timeNs) {
     return {
       positions,
       velocities: JOINT_NAMES.map(() => 0),
       accelerations: [],
       effort: [],
-      time_from_start: secondsToRosTime(seconds)
+      time_from_start: nsToRosStamp(timeNs)
     };
+  }
+
+  function validRosStamp(stamp) {
+    return rosStampToNs(stamp) !== null;
+  }
+
+  function rosStampToNs(stamp) {
+    const sec = Number(stamp && stamp.sec);
+    const nanosec = Number(stamp && stamp.nanosec);
+    if (!Number.isInteger(sec) || !Number.isInteger(nanosec) || sec < 0 || nanosec < 0 || nanosec > 999999999) {
+      return null;
+    }
+    return BigInt(sec) * 1000000000n + BigInt(nanosec);
+  }
+
+  function nsToRosStamp(ns) {
+    const normalized = ns < 0n ? 0n : ns;
+    return {
+      sec: Number(normalized / 1000000000n),
+      nanosec: Number(normalized % 1000000000n)
+    };
+  }
+
+  function millisecondsToNs(milliseconds) {
+    const value = Math.max(0, Number(milliseconds) || 0);
+    return BigInt(Math.round(value * 1e6));
   }
 
   function getCurrentRosPositions() {
@@ -3166,8 +3328,12 @@
   }
 
   function secondsToRosTime(seconds) {
-    const sec = Math.floor(seconds);
-    return { sec, nanosec: Math.round((seconds - sec) * 1e9) };
+    return nsToRosStamp(secondsToNs(seconds));
+  }
+
+  function secondsToNs(seconds) {
+    const value = Math.max(0, Number(seconds) || 0);
+    return BigInt(Math.round(value * 1e9));
   }
 
   function rosTimeToSeconds(time) {

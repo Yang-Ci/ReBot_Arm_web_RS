@@ -103,6 +103,9 @@
   let teachingLastSample = 0;
   let teachingWaypoints = [];
   let teachingPlayback = null;
+  let teachingSource = 'web';
+  let hardwareTeachOriginNs = null;
+  let hardwareTeachFallbackStart = 0;
   const TEACH_SAMPLE_INTERVAL_MS = 90;
   const TEACH_MIN_TCP_STEP = 0.004;
   const TEACH_REPLAY_SAMPLE_HZ = 30;
@@ -125,8 +128,11 @@
     dragHud: document.getElementById('drag-hud'),
     dragStatus: document.getElementById('drag-status'),
     teachRecord: document.getElementById('teach-record'),
+    teachHardwareRecord: document.getElementById('teach-hardware-record'),
     teachReplay: document.getElementById('teach-replay'),
     teachExport: document.getElementById('teach-export'),
+    teachImport: document.getElementById('teach-import'),
+    teachImportFile: document.getElementById('teach-import-file'),
     teachClear: document.getElementById('teach-clear'),
     teachStatus: document.getElementById('teach-status'),
     teachExportText: document.getElementById('teach-export-text'),
@@ -508,10 +514,10 @@
 
     const loader = new URDFLoader(manager);
     loader.packages = {
-      rebotarm_bringup: `${window.location.origin}/api`
+      rebotarm_bringup: new URL('api', document.baseURI).href
     };
 
-    loader.load('/api/urdf', (loadedRobot) => {
+    loader.load(new URL('api/urdf', document.baseURI).href, (loadedRobot) => {
       robot = loadedRobot;
       robotFrame.add(robot);
     }, undefined, (error) => {
@@ -680,7 +686,11 @@
 
   function loadGripperMesh(loader, part, ghost) {
     return new Promise((resolve, reject) => {
-      loader.load(`/api/gripper_meshes/${part.file}?v=${GRIPPER_MESH_VERSION}`, (geometry) => {
+      const meshUrl = new URL(
+        `api/gripper_meshes/${part.file}?v=${GRIPPER_MESH_VERSION}`,
+        document.baseURI
+      );
+      loader.load(meshUrl.href, (geometry) => {
         geometry.computeVertexNormals();
         const material = new THREE.MeshStandardMaterial({
           color: part.color,
@@ -738,6 +748,14 @@
     if (els.teachRecord) els.teachRecord.addEventListener('click', toggleTeachingRecord);
     if (els.teachReplay) els.teachReplay.addEventListener('click', replayTeaching);
     if (els.teachExport) els.teachExport.addEventListener('click', exportTeachingWaypoints);
+    if (els.teachImport) els.teachImport.addEventListener('click', () => els.teachImportFile?.click());
+    if (els.teachImportFile) {
+      els.teachImportFile.addEventListener('change', () => {
+        const file = els.teachImportFile.files && els.teachImportFile.files[0];
+        if (file) importTeachingFile(file);
+        els.teachImportFile.value = '';
+      });
+    }
     if (els.teachClear) els.teachClear.addEventListener('click', clearTeaching);
     if (els.dragMarker) {
       els.dragMarker.addEventListener('pointerdown', startTcpDrag);
@@ -1270,13 +1288,93 @@
     if (els.dragStatus) els.dragStatus.textContent = text;
   }
 
+  let hardwareTeachLastStatusAt = 0;
+
+  function beginHardwareTeaching() {
+    stopPath();
+    teachingPlayback = null;
+    moveStart = 0;
+    gripperMotion = null;
+    teachingRecording = true;
+    teachingSource = 'hardware';
+    teachingWaypoints = [];
+    hardwareTeachOriginNs = null;
+    hardwareTeachFallbackStart = performance.now();
+    hardwareTeachLastStatusAt = 0;
+    if (els.teachExportText) els.teachExportText.value = '';
+    updateTeachingStatus();
+  }
+
+  function appendHardwareTeachingSample(joints, stamp) {
+    if (!teachingRecording || teachingSource !== 'hardware') return false;
+    const sample = {};
+    IKSolver.jointNames.forEach((name) => {
+      const value = Number(joints && joints[name]);
+      if (Number.isFinite(value)) sample[name] = value;
+    });
+    if (Object.keys(sample).length !== IKSolver.jointNames.length) return false;
+
+    const stampNs = rosStampToNs(stamp);
+    let elapsedMs;
+    let rosStamp = null;
+    if (stampNs === null) {
+      elapsedMs = Math.max(0, performance.now() - hardwareTeachFallbackStart);
+    } else {
+      if (hardwareTeachOriginNs === null) hardwareTeachOriginNs = stampNs;
+      const deltaUs = (stampNs - hardwareTeachOriginNs) / 1000n;
+      if (deltaUs < 0n) return false;
+      elapsedMs = Number(deltaUs) / 1000;
+      rosStamp = nsToRosStamp(stampNs);
+    }
+
+    teachingWaypoints.push({
+      t: elapsedMs,
+      joints: sample,
+      source: 'hardware',
+      raw: true,
+      stamp: rosStamp
+    });
+
+    const now = performance.now();
+    if (now - hardwareTeachLastStatusAt >= 120) {
+      hardwareTeachLastStatusAt = now;
+      updateTeachingStatus();
+    }
+    return true;
+  }
+
+  function endHardwareTeaching() {
+    if (!teachingRecording || teachingSource !== 'hardware') return;
+    teachingRecording = false;
+    updateTeachingStatus();
+  }
+
+  function rosStampToNs(stamp) {
+    const sec = Number(stamp && stamp.sec);
+    const nanosec = Number(stamp && stamp.nanosec);
+    if (!Number.isInteger(sec) || !Number.isInteger(nanosec) || sec < 0 || nanosec < 0 || nanosec > 999999999) return null;
+    return BigInt(sec) * 1000000000n + BigInt(nanosec);
+  }
+
+  function nsToRosStamp(ns) {
+    const sec = ns / 1000000000n;
+    const nanosec = ns % 1000000000n;
+    return { sec: Number(sec), nanosec: Number(nanosec) };
+  }
+
   function toggleTeachingRecord() {
+    if (teachingRecording && teachingSource === 'hardware') {
+      updateTeachingStatus('真机示教中，请先结束真机示教');
+      return;
+    }
     if (teachingRecording) {
       // Capture the release/final pose while recording is still active.
       recordTeachingWaypoint(true);
       teachingRecording = false;
     } else {
       teachingWaypoints = [];
+      teachingSource = 'web';
+      hardwareTeachOriginNs = null;
       teachingStart = performance.now();
       teachingLastSample = 0;
       teachingPlayback = null;
@@ -1305,6 +1403,7 @@
     teachingWaypoints.push({
       t: Math.max(0, now - teachingStart),
       joints: { ...currentAngles },
+      source: 'web',
       tcp: { x: tcp.x, y: tcp.y, z: tcp.z },
       tcp_ros: { x: ros.x, y: ros.y, z: ros.z }
     });
@@ -1312,6 +1411,10 @@
   }
 
   function replayTeaching() {
+    if (teachingRecording) {
+      updateTeachingStatus('录制中不能回放，请先停止录制');
+      return;
+    }
     if (!teachingWaypoints.length || !robot) {
       updateTeachingStatus('没有可回放的 waypoint');
       return;
@@ -1363,11 +1466,33 @@
       .filter((point) => point && point.joints)
       .map((point) => ({
         t: Number(point.t) || 0,
-        joints: { ...point.joints },
-        tcp: point.tcp ? { ...point.tcp } : null,
-        tcp_ros: point.tcp_ros ? { ...point.tcp_ros } : null
-      }));
+      joints: { ...point.joints },
+      tcp: point.tcp ? { ...point.tcp } : null,
+      tcp_ros: point.tcp_ros ? { ...point.tcp_ros } : null,
+      raw: Boolean(point.raw),
+      source: point.source,
+      stamp: point.stamp ? { ...point.stamp } : null,
+      time_from_start: point.time_from_start ? { ...point.time_from_start } : null
+    }));
     if (source.length < 2) return source;
+
+    // Hardware teaching is a measurement, not a generated web trajectory. Keep
+    // every raw encoder position and ROS timestamp; only prepend the safety
+    // move from the current pose to the first recorded pose.
+    if (source.every((point) => point.raw || point.source === 'hardware')) {
+      const firstTime = source[0].t;
+      source.forEach((point, index) => {
+        point.t = Math.max(index ? source[index - 1].t : 0, point.t - firstTime);
+      });
+      const returnSeconds = Math.max(
+        0.15,
+        maxArmJointDelta(currentAngles, source[0].joints) / TEACH_REPLAY_RETURN_SPEED_RAD_S
+      );
+      return source.map((point) => ({
+        ...point,
+        t: returnSeconds * 1000 + point.t
+      }));
+    }
 
     const names = jointDefs.map((joint) => joint.name);
     const firstTime = source[0].t;
@@ -1526,23 +1651,32 @@
   }
 
   function exportTeachingWaypoints() {
+    if (teachingRecording) {
+      updateTeachingStatus('录制中不能导出，请先停止录制');
+      return;
+    }
     if (!teachingWaypoints.length) {
       updateTeachingStatus('没有可导出的 waypoint');
       return;
     }
-    const jointNames = jointDefs.map((joint) => joint.name);
+    const raw = teachingWaypoints.every((point) => point.raw || point.source === 'hardware');
+    const jointNames = raw ? IKSolver.jointNames : jointDefs.map((joint) => joint.name);
+    const firstStampNs = raw && teachingWaypoints[0].stamp
+      ? rosStampToNs(teachingWaypoints[0].stamp)
+      : null;
+
     const payload = {
-      format: 'rebotarm_ros_waypoints_v1',
+      format: 'rebotarm_rs_teach_v1',
       frame_id: 'base_link',
       joint_names: jointNames,
       count: teachingWaypoints.length,
+      source: raw ? 'hardware' : 'web',
+      sample: raw ? 'raw' : 'web',
       waypoints: teachingWaypoints.map((point) => ({
-        time_from_start: {
-          sec: Math.floor(point.t / 1000),
-          nanosec: Math.round((point.t % 1000) * 1e6)
-        },
+        time_from_start: waypointRosTime(point, firstStampNs),
         positions: jointNames.map((name) => point.joints[name] ?? 0),
-        tcp_ros: point.tcp_ros
+        ...(point.stamp ? { ros_stamp: point.stamp } : {}),
+        ...(point.tcp_ros ? { tcp_ros: point.tcp_ros } : {})
       }))
     };
     const text = JSON.stringify(payload, null, 2);
@@ -1554,13 +1688,172 @@
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).catch(() => {});
     }
+    downloadTeachJson(text);
     updateTeachingStatus(t('sim.exported', { n: teachingWaypoints.length }));
   }
 
+  function waypointRosTime(point, firstStampNs) {
+    if (point.time_from_start && validRosStamp(point.time_from_start)) {
+      return { ...point.time_from_start };
+    }
+    const stampNs = point.stamp ? rosStampToNs(point.stamp) : null;
+    if (stampNs !== null && firstStampNs !== null) {
+      const relativeNs = stampNs - firstStampNs;
+      return nsToRosStamp(relativeNs);
+    }
+    const ms = Math.max(0, Number(point.t) || 0);
+    return {
+      sec: Math.floor(ms / 1000),
+      nanosec: Math.round((ms % 1000) * 1e6)
+    };
+  }
+
+  function downloadTeachJson(text) {
+    const blob = new Blob([text], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const now = new Date();
+    const pad = (value) => String(value).padStart(2, '0');
+    link.href = url;
+    link.download = `rebotarm-teach-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function importTeachingFile(file) {
+    try {
+      if (teachingRecording) {
+        updateTeachingStatus('录制中不能导入，请先停止录制');
+        return;
+      }
+      importTeachingText(await file.text());
+    } catch (error) {
+      updateTeachingStatus(t('sim.importFailed', { error: error.message || error }));
+    }
+  }
+
+  function importTeachingText(text) {
+    if (teachingRecording) {
+      throw new Error('录制中不能导入，请先停止录制');
+    }
+    let payload;
+    try {
+      payload = JSON.parse(text);
+    } catch (error) {
+      throw new Error('JSON 解析失败');
+    }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new Error('示教 JSON 必须是对象');
+    }
+
+    const format = String(payload.format || '');
+    if (format !== 'rebotarm_rs_teach_v1' && format !== 'rebotarm_ros_waypoints_v1') {
+      throw new Error('不支持的示教格式');
+    }
+    const jointNames = Array.isArray(payload.joint_names) ? payload.joint_names.map(String) : [];
+    const uniqueNames = new Set(jointNames);
+    const knownNames = new Set(jointDefs.map((joint) => joint.name));
+    if (
+      !jointNames.length ||
+      uniqueNames.size !== jointNames.length ||
+      jointNames.some((name) => !knownNames.has(name)) ||
+      IKSolver.jointNames.some((name) => !uniqueNames.has(name))
+    ) {
+      throw new Error('joint_names 不完整或不匹配');
+    }
+
+    const sourcePoints = Array.isArray(payload.waypoints) ? payload.waypoints : [];
+    if (
+      (Number.isInteger(payload.count) && payload.count !== sourcePoints.length) ||
+      sourcePoints.length < 2
+    ) {
+      throw new Error('waypoint 数量不足或 count 不匹配');
+    }
+
+    const raw = payload.sample === 'raw' || payload.source === 'hardware';
+    const points = [];
+    let previousStampNs = null;
+    sourcePoints.forEach((sourcePoint, index) => {
+      const positions = Array.isArray(sourcePoint.positions) ? sourcePoint.positions : [];
+      if (positions.length !== jointNames.length) {
+        throw new Error(`第 ${index + 1} 点 positions 长度不匹配`);
+      }
+      const joints = {};
+      jointNames.forEach((name, jointIndex) => {
+        const value = positions[jointIndex];
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+          throw new Error(`第 ${index + 1} 点存在非数值`);
+        }
+        joints[name] = value;
+      });
+
+      const stamp = validRosStamp(sourcePoint.ros_stamp) ? sourcePoint.ros_stamp : null;
+      const time = validRosStamp(sourcePoint.time_from_start)
+        ? sourcePoint.time_from_start
+        : null;
+      if (!time) throw new Error(`第 ${index + 1} 点 time_from_start 无效`);
+      const timeNs = rosStampToNs(time);
+      const stampNs = stamp ? rosStampToNs(stamp) : null;
+      if (stamp && stampNs === null) throw new Error(`第 ${index + 1} 点 ros_stamp 无效`);
+      if ((stamp || previousStampNs !== null) && (stamp === null || previousStampNs === null)) {
+        throw new Error('ros_stamp 必须在所有 waypoint 中成对出现');
+      }
+      if (stampNs !== null) {
+        if (previousStampNs !== null && stampNs <= previousStampNs) {
+          throw new Error('ros_stamp 必须严格递增');
+        }
+        const originNs = previousStampNs === null ? stampNs : previousStampNs;
+        const relativeNs = stampNs - originNs;
+        if (relativeNs !== timeNs) {
+          throw new Error(`第 ${index + 1} 点 time_from_start 与 ros_stamp 不一致`);
+        }
+        previousStampNs = stampNs;
+      }
+      const elapsedMs = rosStampToMs(time);
+      if (index && elapsedMs <= points[index - 1].t) {
+        throw new Error('waypoint 时间必须严格递增');
+      }
+      points.push({
+        t: elapsedMs,
+        joints,
+        source: raw ? 'hardware' : 'import',
+        raw,
+        stamp,
+        time_from_start: { ...time }
+      });
+    });
+
+    teachingRecording = false;
+    teachingPlayback = null;
+    teachingWaypoints = points;
+    teachingSource = raw ? 'hardware' : 'import';
+    hardwareTeachOriginNs = null;
+    if (els.teachExportText) els.teachExportText.value = text;
+    updateTeachingStatus(t('sim.imported', { n: points.length }));
+  }
+
+  function validRosStamp(stamp) {
+    return Boolean(stamp) && rosStampToNs(stamp) !== null;
+  }
+
+  function rosStampToMs(stamp) {
+    const ns = rosStampToNs(stamp);
+    if (ns === null) throw new Error('ROS 时间戳无效');
+    return Number(ns / 1000n) / 1000;
+  }
+
   function clearTeaching() {
+    if (teachingRecording) {
+      updateTeachingStatus('录制中不能清空，请先停止录制');
+      return;
+    }
     teachingRecording = false;
     teachingPlayback = null;
     teachingWaypoints = [];
+    teachingSource = 'web';
+    hardwareTeachOriginNs = null;
     if (els.teachExportText) els.teachExportText.value = '';
     updateTeachingStatus();
   }
@@ -1570,16 +1863,30 @@
       els.teachRecord.textContent = teachingRecording ? t('sim.stopRecord') : t('teach.record');
       els.teachRecord.classList.toggle('active', teachingRecording);
     }
+    if (els.teachHardwareRecord) {
+      els.teachHardwareRecord.textContent = teachingRecording && teachingSource === 'hardware'
+        ? t('sim.stopHardwareRecord')
+        : t('teach.hardwareRecord');
+      els.teachHardwareRecord.classList.toggle('active', teachingRecording && teachingSource === 'hardware');
+    }
     if (!els.teachStatus) return;
     if (message) {
       els.teachStatus.textContent = message;
     } else if (teachingRecording) {
-      els.teachStatus.textContent = t('sim.recording', { n: teachingWaypoints.length });
+      els.teachStatus.textContent = teachingSource === 'hardware'
+        ? t('sim.hardwareRecording', {
+          n: teachingWaypoints.length,
+          sec: (teachingWaypoints.length ? teachingWaypoints[teachingWaypoints.length - 1].t / 1000 : 0).toFixed(3)
+        })
+        : t('sim.recording', { n: teachingWaypoints.length });
     } else if (teachingPlayback) {
       els.teachStatus.textContent = t('sim.replaying');
     } else if (teachingWaypoints.length) {
       const duration = teachingWaypoints[teachingWaypoints.length - 1].t / 1000;
-      els.teachStatus.textContent = t('sim.recorded', { n: teachingWaypoints.length, sec: duration.toFixed(1) });
+      const raw = teachingWaypoints.every((point) => point.raw || point.source === 'hardware');
+      els.teachStatus.textContent = raw
+        ? t('sim.hardwareRecorded', { n: teachingWaypoints.length, sec: duration.toFixed(3) })
+        : t('sim.recorded', { n: teachingWaypoints.length, sec: duration.toFixed(1) });
     } else {
       els.teachStatus.textContent = t('teach.status');
     }
@@ -1993,7 +2300,7 @@
     updateAxisLabelVisibility(frameNow);
     if (robot) {
       robot.updateMatrixWorld(true);
-      if (teachingRecording) recordTeachingWaypoint(false);
+      if (teachingRecording && teachingSource !== 'hardware') recordTeachingWaypoint(false);
       updateTcpHud();
       updateCarriedObject();
       updateDragMarker();
@@ -2125,9 +2432,15 @@
       return teachingWaypoints.map((point) => ({
         ...point,
         joints: { ...point.joints },
-        tcp_ros: { ...point.tcp_ros }
+        stamp: point.stamp ? { ...point.stamp } : null,
+        time_from_start: point.time_from_start ? { ...point.time_from_start } : null,
+        tcp_ros: point.tcp_ros ? { ...point.tcp_ros } : null
       }));
     },
+    beginHardwareTeaching,
+    appendHardwareTeachingSample,
+    endHardwareTeaching,
+    importTeachingText,
     setAngles(angles, options) {
       if (!angles || typeof angles !== 'object') return;
       const source = options && options.source ? options.source : 'api';

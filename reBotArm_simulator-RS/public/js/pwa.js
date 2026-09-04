@@ -15,7 +15,7 @@
     setInstallStatus('手机安装需要 HTTPS；localhost 可安装，局域网 HTTP 只能浏览');
   } else if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/service-worker.js', { updateViaCache: 'none' })
+      navigator.serviceWorker.register(new URL('service-worker.js', document.baseURI).href, { updateViaCache: 'none' })
         .then((registration) => registration.update().then(() => registration))
         .then(() => setInstallStatus(isStandalone() ? '已作为 App 打开' : '可从浏览器菜单添加到桌面'))
         .catch(() => setInstallStatus('Service Worker 注册失败，暂时只能浏览'));

@@ -5,6 +5,7 @@ on:
     branches: [main, feat/web-mujoco-m1]
     paths:
       - 'web_mujoco/**'
+      - 'reBotArm_simulator-RS/**'
       - '.github/workflows/pages.yml'
       - 'rebotarm_ros2_RS/src/rebotarm_mujoco_rs/models/**'
   workflow_dispatch:
@@ -28,13 +29,16 @@ jobs:
           node-version: '20'
           cache: npm
           cache-dependency-path: web_mujoco/package-lock.json
-      - name: Install and build
+      - name: Install and build web_mujoco
         working-directory: web_mujoco
         env:
           GITHUB_PAGES_BASE: /${{ github.event.repository.name }}/
         run: |
           npm ci
           npm run build
+      - name: Build RS console
+        working-directory: reBotArm_simulator-RS
+        run: npm run build:pages -- ../web_mujoco/dist/rs-console
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web_mujoco/dist

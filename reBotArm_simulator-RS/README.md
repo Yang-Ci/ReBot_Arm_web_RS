@@ -29,6 +29,28 @@ npm start
 
 浏览器访问 `http://localhost:3002`。
 
+## GitHub Pages
+
+GitHub Pages 地址：
+
+```text
+https://yang-ci.github.io/ReBot_Arm_web_RS/rs-console/
+```
+
+Pages 构建使用 `npm run build:pages -- ../web_mujoco/dist/rs-console`，会
+复用当前仓库中的 ROS URDF、RS 手臂 STL 和夹爪 STL，输出纯静态页面；现有
+`web_mujoco` 根页面保持不变。也可在本地只生成 RS 静态站点：
+
+```bash
+cd reBotArm_simulator-RS
+npm run build:pages
+```
+
+注意：GitHub Pages 是 HTTPS，浏览器会阻止页面连接明文 `ws://<机器人IP>:9090`。
+从 Pages 使用真机推动示教时，rosbridge 需要通过 `wss://` 提供；本地
+`npm start` 页面则可以直接使用 `ws://`。AI 助手的 Node 代理同样只在本地服务
+中可用，Pages 上模型、ROS 面板和示教导入导出功能不受影响。
+
 ## 启动安全仿真
 
 先在仓库根目录构建 ROS 2 工作区：
@@ -71,6 +93,25 @@ export REBOTARM_RS_HARDWARE_CONFIRM=I_UNDERSTAND_RS_WILL_MOVE
 
 执行前必须确认 `can0` 配置正确、机械臂工作区无人、物理急停可用。网页真机
 模式不会自动打开控制锁。
+
+### 推动真机示教
+
+1. 启动 RS 真机 ROS 2 Controller 与 rosbridge，网页选择“RS 真机”。
+2. 连接 rosbridge，收到 `/rebotarm/joint_states` 后打开控制锁。
+3. 点击“推动真机示教”。网页会请求进入重力补偿，成功后开始记录。
+4. 用手轻推机械臂完成需要的轨迹，再点击“结束真机示教”退出重力补偿。
+5. 点击“回放”执行，或点击“导出 / 下载 JSON”保存；之后可用“导入 JSON”
+   恢复同一条轨迹。
+
+录制数据来自 `/joint_states` 的原始 `position`，不做滤波、死区、抽稀或平滑；
+时间优先使用 `header.stamp` 的整数纳秒，缺失时才回退到浏览器时钟。导出为
+JSON，JavaScript number 与整数纳秒时间戳原样保留。回放同样使用原始 waypoint
+和整数纳秒间隔，仅在正式轨迹前加入“当前姿态到示教起点”的安全引导段。
+录制期间网页滑块、TCP 拖拽和回放命令会被拒绝，避免和人工推动互相抢控制权。
+
+导入兼容 `rebotarm_ros_waypoints_v1` 与 `rebotarm_rs_teach_v1`。新格式会校验
+关节名、点位数量、数值、时间单调性以及 `ros_stamp` 与 `time_from_start`
+的一致性，避免导入被篡改或精度受损的数据。
 
 ## ROS 2 接口约定
 
